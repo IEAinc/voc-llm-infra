@@ -42,11 +42,22 @@ t_stop_delete_fail_keeps_state() {
   [ -f "$VOC_HOME/state/current_pod" ] || fail "current_pod must remain for retry"
 }
 
-t_stop_skips_holiday() {
+t_stop_deletes_on_holiday() {
   start
   echo 2026-11-16 >> "$VOC_HOME/holidays.txt"
   stop
-  assert_eq "$(events)" "START:ok STOP:skipped_holiday" "events"
+  assert_eq "$(events)" "START:ok STOP:ok" "events"
+  assert_eq "$(calls_count 'RP DELETE /pods/pod1')" 1 "deleted on holiday"
+  assert_no_file "$VOC_HOME/state/current_pod"
 }
 
-run_tests t_stop_ok t_stop_no_pod t_stop_delete_404_counts_as_deleted t_stop_delete_fail_keeps_state t_stop_skips_holiday
+t_stop_deletes_orphan_created_pod() {
+  start
+  echo '{"id":"podX"}' > "$VOC_HOME/state/created.json"
+  stop
+  assert_eq "$(calls_count 'RP DELETE /pods/podX')" 1 "orphan deleted"
+  assert_eq "$(calls_count 'RP DELETE /pods/pod1')" 1 "current deleted"
+  assert_no_file "$VOC_HOME/state/created.json"
+}
+
+run_tests t_stop_ok t_stop_no_pod t_stop_delete_404_counts_as_deleted t_stop_delete_fail_keeps_state t_stop_deletes_on_holiday t_stop_deletes_orphan_created_pod

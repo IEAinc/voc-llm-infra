@@ -151,6 +151,7 @@ _start_abort() {
   trap - EXIT INT TERM
   local dmsg
   if rp DELETE "/pods/$1" >/dev/null 2>&1; then dmsg="삭제했습니다"; else dmsg="삭제 실패 — RunPod 콘솔에서 직접 삭제 필요"; fi
+  rm -f "$STATE_DIR/current_pod" "$STATE_DIR/current_pod.tmp"
   upstream_off || true
   log_event START failed_aborted --arg pod_id "$1" || true
   notify "START failed: aborted" "START 중단: Pod $1 $dmsg." || true
@@ -194,7 +195,8 @@ do_start() {
       trap - EXIT INT TERM
       if rp DELETE "/pods/$id" >/dev/null 2>&1; then dmsg="삭제했습니다"; else dmsg="삭제 실패 — RunPod 콘솔에서 직접 삭제 필요"; fi
       upstream_off || true
-      log_event START failed_not_ready --arg trigger "$trigger" --arg requested_at "$requested_at"         --arg pod_id "$id" --arg gpu "$gpu" --argjson waited_sec "$waited" --arg last_http "$code"
+      log_event START failed_not_ready --arg trigger "$trigger" --arg requested_at "$requested_at" \
+        --arg pod_id "$id" --arg gpu "$gpu" --argjson waited_sec "$waited" --arg last_http "$code"
       notify "START failed: vLLM not ready" "Pod $id ($gpu)가 ${READY_TIMEOUT_SEC}초 안에 준비되지 않았습니다(마지막 응답: $code). Pod $dmsg."
       return 1
     fi
@@ -212,7 +214,7 @@ do_start() {
 
   jq -n --arg pod_id "$id" --arg gpu "$gpu" --arg datacenter "$dc" --argjson cost_per_hr "$cost" \
     --arg started_at "$created_at" --argjson created_epoch "$created_epoch" --arg endpoint "https://$host" \
-    '$ARGS.named' > "$STATE_DIR/current_pod"
+    '$ARGS.named' > "$STATE_DIR/current_pod.tmp" && mv "$STATE_DIR/current_pod.tmp" "$STATE_DIR/current_pod" || return 1
   echo 0 > "$STATE_DIR/health_fail"
   trap - EXIT INT TERM
   log_event START ok --arg trigger "$trigger" --arg requested_at "$requested_at" --arg ready_at "$(now_iso)" \
@@ -221,10 +223,23 @@ do_start() {
     --arg model "$MODEL_ID" --arg endpoint "https://$host"
 }
 
+# stop_orphan CUR_ID : created.json 의 Pod 가 현재 Pod 와 다르면(기록되지 못한 Pod) 삭제한다. 404 는 정상
+stop_orphan() {
+  local oid rc=0 cf="$STATE_DIR/created.json"
+  [ -f "$cf" ] || return 0
+  oid=$(pod_id_of "$(cat "$cf")") || oid=""
+  if [ -n "$oid" ] && [ "$oid" != "${1:-}" ]; then
+    rp DELETE "/pods/$oid" >/dev/null 2>&1 || rc=$?
+    if [ "$rc" -ne 0 ] && [ "$rc" -ne 4 ]; then return 0; fi
+    rm -f "$cf"
+  fi
+}
+
 # do_stop LABEL(ok|replaced) : 먼저 upstream 차단 → 삭제 3회 시도 → STOP 로그
 do_stop() {
   local label=${1:-ok} cur id gpu cost created i rc=1 sec uptime est
   upstream_off || true
+  stop_orphan "$(jq -r '.pod_id // empty' "$STATE_DIR/current_pod" 2>/dev/null || true)"
   if [ ! -f "$STATE_DIR/current_pod" ]; then
     log_event STOP no_pod
     return 0

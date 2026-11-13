@@ -120,11 +120,12 @@ RunPod HTTP proxy는 앞단 Cloudflare 때문에 **약 100초** 동안 응답이
 # /etc/cron.d/voc-llm  (TZ=Asia/Seoul)
 30 8 * * 1-5     root /opt/voc-llm/pod-start.sh
 0 18 * * 1-5     root /opt/voc-llm/pod-stop.sh
+30 19 * * 1-5    root /opt/voc-llm/pod-stop.sh   # 안전망: 18:00 stop 이 실패했을 때 재시도
 */2 9-17 * * 1-5 root /opt/voc-llm/pod-health.sh
 0 7 * * 1        root /opt/voc-llm/holiday-sync.sh
 ```
 
-- 세 스크립트 모두 시작할 때 오늘이 휴일이면 종료한다. 휴일 판정 규칙은 6-2절을 따른다. start와 stop은 로그를 남기고 종료하고, health는 조용히 종료한다.
+- start·health 는 시작할 때 오늘이 휴일이면 종료한다. 휴일 판정 규칙은 6-2절을 따른다. start는 로그를 남기고 종료하고, health는 조용히 종료한다. stop 은 공휴일에도 항상 실행한다(남은 Pod 를 지워야 과금이 멈춘다).
 - 세 스크립트는 같은 잠금 파일(`flock /var/lock/voc-llm.lock`)을 쓴다. 동시에 실행되지 않게 하기 위해서다.
   - start와 stop은 잠금을 얻을 때까지 기다린다.
   - health는 잠금을 얻지 못하면 바로 종료한다. 기동이나 복구가 진행 중이면 그 회차의 점검은 건너뛴다는 뜻이다.
@@ -133,7 +134,7 @@ RunPod HTTP proxy는 앞단 Cloudflare 때문에 **약 100초** 동안 응답이
 
 ```
 1. 오늘이 공휴일이면 START 로그(result=skipped_holiday)를 남기고 종료
-2. state/current_pod 가 있으면 (이미 기동 중) START 로그(result=already_running) 후 종료
+2. state/current_pod 가 있으면 그 Pod 의 vLLM 을 확인한다. 준비됐으면 upstream ON 으로 다시 맞추고 START 로그(result=already_running) 후 종료. 준비 안 됐으면 삭제(do_stop) 후 새로 기동
 3. [1단계] Network Volume 데이터센터에서 생성
    POST https://rest.runpod.io/v1/pods
      cloudType=SECURE, gpuTypeIds=gpu-priority.txt 순서, gpuTypePriority=custom,
@@ -267,11 +268,12 @@ STOP (종료 시):
 | result 값 | 의미 |
 |---|---|
 | `ok` | 정상 |
-| `skipped_holiday` | 공휴일이라 건너뜀 |
+| `skipped_holiday` (START) | 공휴일이라 건너뜀 |
 | `already_running` | 이미 기동 중인 Pod가 있음 |
 | `failed_no_gpu` | 1·2단계 모두 GPU 확보 실패 |
 | `failed_not_ready` | Pod는 생성됐지만 25분 안에 vLLM이 준비되지 않음 (Pod 삭제함) |
 | `failed_reload` | vLLM은 준비됐지만 nginx reload 실패 (Pod 삭제함) |
+| `failed_aborted` (START) | Pod 생성 후 예기치 않게 중단됨 (Pod 삭제 시도, 알림 발송) |
 | `no_pod` | 종료 시점에 기동 중인 Pod가 없음 |
 | `failed_delete` | Pod 삭제 실패. 수동 조치 필요 |
 | `replaced` (STOP) | 장애 Pod를 자동 복구하려고 삭제함 |
@@ -310,8 +312,8 @@ HOLIDAY_SYNC (공휴일 갱신, 매주 1줄):
 | 휴일인데 기동해야 함 | `pod-start.sh --force` 실행 (`--force`면 공휴일 체크를 건너뛴다) |
 | 모델 교체 | `.env`의 `MODEL_ID` 변경. 다음 기동부터 반영된다. 고객사 쪽 `model` 값은 `voc-llm` 그대로 |
 | 고객사 키 교체 | `client_keys.conf`를 수정한 뒤 reload |
-| 회사 자체 휴무일 | `holidays.txt`에 날짜 추가 (법정공휴일은 자동 반영되므로 넣지 않아도 된다) |
-| 공휴일 갱신 실패 알림 | `HOLIDAY_API_KEY`가 유효한지 공공데이터포털에서 확인한 뒤 `holiday-sync.sh`를 수동 실행 |
+| 회사 자체 휴무일 | 저장소의 `ec2/holidays.txt`에 날짜를 추가하고 `install.sh`를 다시 실행한다. 저장소 파일이 원본이라 install 이 서버의 `holidays.txt`를 덮어쓰므로 서버에서 직접 고치면 사라진다 (법정공휴일은 자동 반영되므로 넣지 않아도 된다) |
+| 공휴일 갱신 실패 알림 | `.env`의 `HOLIDAY_API_KEY`가 공공데이터포털의 "Decoding"(일반) 인증키인지, 유효한지 확인한 뒤 `holiday-sync.sh`를 수동 실행 |
 
 ## 9. 서버 자원 및 생존 모니터링
 

@@ -15,7 +15,13 @@ if [ "$trigger" = cron ] && is_holiday; then
   exit 0
 fi
 if [ -f "$STATE_DIR/current_pod" ]; then
-  log_event START already_running --arg pod_id "$(jq -r .pod_id "$STATE_DIR/current_pod")"
-  exit 0
+  host=$(jq -r '.endpoint // empty' "$STATE_DIR/current_pod")
+  host=${host#https://}
+  if [ -n "$host" ] && [ "$(vllm_status "$host")" = 200 ]; then
+    upstream_on "$host"
+    log_event START already_running --arg pod_id "$(jq -r .pod_id "$STATE_DIR/current_pod")"
+    exit 0
+  fi
+  do_stop replaced || exit 1
 fi
 do_start "$trigger"

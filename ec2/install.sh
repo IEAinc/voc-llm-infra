@@ -14,6 +14,8 @@ if [ ! -f "$APP/.env" ]; then
 fi
 set -a; . "$APP/.env"; set +a
 : "${DOMAIN:?.env 에 DOMAIN 필요}" "${CERT_EMAIL:?.env 에 CERT_EMAIL 필요}" "${VLLM_API_KEY:?.env 에 VLLM_API_KEY 필요}"
+: "${RUNPOD_API_KEY:?.env 에 RUNPOD_API_KEY 필요}" "${VLLM_IMAGE:?.env 에 VLLM_IMAGE 필요}"
+case "$VLLM_IMAGE" in *v0.0.0*) echo ".env 의 VLLM_IMAGE 가 자리표시자(v0.0.0)입니다. 실제 태그로 바꾸세요." >&2; exit 1 ;; esac
 
 # 시간대 (cron 이 KST 로 동작하도록)
 timedatectl set-timezone Asia/Seoul
@@ -45,7 +47,7 @@ fi
 
 # nginx
 rm -f /etc/nginx/sites-enabled/default
-envsubst '${DOMAIN} ${VLLM_API_KEY}' < "$SRC/conf/nginx/voc-llm.conf.tmpl" > /etc/nginx/conf.d/voc-llm.conf
+(umask 077; envsubst '${DOMAIN} ${VLLM_API_KEY}' < "$SRC/conf/nginx/voc-llm.conf.tmpl" > /etc/nginx/conf.d/voc-llm.conf)
 chmod 600 /etc/nginx/conf.d/voc-llm.conf
 if [ ! -f /etc/nginx/voc-llm/client_keys.conf ]; then
   KEY=$(openssl rand -hex 32)

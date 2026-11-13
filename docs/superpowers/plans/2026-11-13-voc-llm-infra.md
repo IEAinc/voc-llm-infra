@@ -49,7 +49,7 @@ voc-llm-infra/
 ├── ec2/                                        # EC2에 설치되는 모든 것
 │   ├── bin/lib.sh                              # 공통 함수: 로그, 상태, upstream, RunPod API, start/stop/health 로직
 │   ├── bin/pod-start.sh                        # 잠금 + 공휴일 + do_start
-│   ├── bin/pod-stop.sh                         # 잠금 + 공휴일 + do_stop
+│   ├── bin/pod-stop.sh                         # 잠금 + do_stop (공휴일 무시)
 │   ├── bin/pod-health.sh                       # 비차단 잠금 + 공휴일 + do_health
 │   ├── bin/holiday-sync.sh                     # 매주 월 07:00 공휴일 API 갱신 (do_holiday_sync)
 │   ├── gpu-priority.txt                        # GPU ID 우선순위
@@ -781,17 +781,17 @@ t_stop_delete_fail_keeps_state() {
   [ -f "$VOC_HOME/state/current_pod" ] || fail "current_pod must remain for retry"
 }
 
-t_stop_skips_holiday() {
+t_stop_deletes_on_holiday() {
   start
   echo 2026-11-16 >> "$VOC_HOME/holidays.txt"
   stop
-  assert_eq "$(events)" "START:ok STOP:skipped_holiday" "events"
+  assert_eq "$(events)" "START:ok STOP:ok" "events"
 }
 
-run_tests t_stop_ok t_stop_no_pod t_stop_delete_404_counts_as_deleted t_stop_delete_fail_keeps_state t_stop_skips_holiday
+run_tests t_stop_ok t_stop_no_pod t_stop_delete_404_counts_as_deleted t_stop_delete_fail_keeps_state t_stop_deletes_on_holiday
 ```
 
-`t_stop_skips_holiday`는 설계 4장 "start와 stop은 공휴일이면 로그를 남기고 종료"에 따른 것이다. 공휴일에는 Pod가 기동되지 않으므로 지울 대상도 없다. 공휴일에 `--force`로 띄운 Pod는 `pod-stop.sh --force`로 내린다.
+`t_stop_deletes_on_holiday`: stop 은 공휴일을 확인하지 않는다(사람 결정). 공휴일에 `--force` 등으로 기동된 Pod 나 남은 Pod 도 반드시 지워야 과금이 멈춘다. Pod 가 없으면 do_stop 이 `no_pod` 를 기록한다.
 
 - [ ] **Step 2: 테스트 실패 확인**
 
@@ -840,7 +840,7 @@ do_stop() {
 `ec2/bin/pod-stop.sh`:
 ```bash
 #!/usr/bin/env bash
-# 평일 18:00 cron. 수동: pod-stop.sh --force (공휴일 무시)
+# 평일 18:00 cron (+ 19:30 안전망). 공휴일에도 항상 실행한다(남은 Pod 삭제)
 set -euo pipefail
 # shellcheck disable=SC1091
 . "$(dirname "$0")/lib.sh"
@@ -848,10 +848,6 @@ set -euo pipefail
 exec 9>"$LOCK_FILE"
 flock 9
 
-if [ "${1:-}" != "--force" ] && is_holiday; then
-  log_event STOP skipped_holiday
-  exit 0
-fi
 do_stop ok
 ```
 

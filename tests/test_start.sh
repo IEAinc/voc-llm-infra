@@ -85,6 +85,22 @@ t_start_already_running() {
   assert_eq "$(calls_count 'RP POST /pods')" 1 "only one create"
 }
 
+t_start_already_running_reenables_upstream() {
+  start
+  printf 'return 503;\n' > "$UPSTREAM_CONF"
+  start
+  assert_eq "$(last .result)" already_running "result"
+  assert_file_has "$UPSTREAM_CONF" "proxy_pass https://pod1-8000.proxy.runpod.net;"
+}
+
+t_start_already_running_not_ready_restarts() {
+  start
+  FAKE_VLLM_BAD_HOST=pod1-8000.proxy.runpod.net start || fail "should restart"
+  assert_eq "$(calls_count 'RP DELETE /pods/pod1')" 1 "old pod deleted"
+  assert_eq "$(last .pod_id)" pod2 "new pod"
+  assert_eq "$(last .result)" ok "result"
+}
+
 t_start_resets_recover_counters() {
   echo 3 > "$VOC_HOME/state/recover_20261116"
   touch "$VOC_HOME/state/gave_up_20261116"
@@ -95,4 +111,4 @@ t_start_resets_recover_counters() {
 
 run_tests t_start_ok t_start_fallback_to_stage2 t_start_no_gpu t_start_not_ready_deletes_pod \
   t_start_not_ready_counts_slow_checks t_start_abort_deletes_pod \
-  t_start_skips_holiday t_start_force_on_holiday t_start_already_running t_start_resets_recover_counters
+  t_start_skips_holiday t_start_force_on_holiday t_start_already_running t_start_already_running_reenables_upstream t_start_already_running_not_ready_restarts t_start_resets_recover_counters
