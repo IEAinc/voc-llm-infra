@@ -1,0 +1,7 @@
+# RunPod gpuTypeId, 위에서부터 우선 (비용 순). '#' 줄과 빈 줄은 무시된다.
+# RTX PRO 6000 MIG 48GB 의 ID는 Task 7에서 확인한 뒤 맨 아래에 추가한다.
+NVIDIA RTX A6000
+NVIDIA A40
+NVIDIA L40
+NVIDIA RTX 6000 Ada Generation
+NVIDIA L40S
