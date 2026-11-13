@@ -1,0 +1,8 @@
+# 비밀값과 고객 데이터
+.env
+ec2/.env
+infra/aws.env
+infra/aws.out
+eval/samples.jsonl
+eval/results/
+__pycache__/
