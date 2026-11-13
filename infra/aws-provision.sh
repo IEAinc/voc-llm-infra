@@ -26,7 +26,7 @@ aws iam put-role-policy --role-name voc-llm-ec2 --policy-name sns-publish --poli
 if ! aws ec2 describe-key-pairs --key-names "$KEY_NAME" >/dev/null 2>&1; then
   ( umask 077; aws ec2 create-key-pair --key-name "$KEY_NAME" --key-type ed25519 \
       --tag-specifications "ResourceType=key-pair,Tags=[{$TAG}]" \
-      --query KeyMaterial --output text > "$KEY_NAME.pem" )
+      --query KeyMaterial --output text | tr -d "\015" > "$KEY_NAME.pem"; echo >> "$KEY_NAME.pem" )  # OpenSSH 는 마지막 줄바꿈 필요
   echo "개인키 저장: infra/$KEY_NAME.pem"
 fi
 

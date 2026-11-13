@@ -57,6 +57,7 @@ if [ ! -f /etc/nginx/voc-llm/client_keys.conf ]; then
 fi
 [ -f /etc/nginx/voc-llm/upstream.conf ] || VOC_NO_RELOAD=1 bash -c ". $APP/bin/lib.sh; upstream_off"
 install -D -m 644 "$SRC/conf/systemd/nginx-override.conf" /etc/systemd/system/nginx.service.d/override.conf
+systemctl daemon-reload
 
 # cron, logrotate, journald
 install -m 644 "$SRC/conf/cron/voc-llm" /etc/cron.d/voc-llm
@@ -64,7 +65,6 @@ install -m 644 "$SRC/conf/logrotate/voc-llm" /etc/logrotate.d/voc-llm
 install -d /etc/systemd/journald.conf.d
 printf '[Journal]\nSystemMaxUse=200M\n' > /etc/systemd/journald.conf.d/size.conf
 
-systemctl daemon-reload
 systemctl restart systemd-journald
 systemctl enable nginx cron
 systemctl restart cron
