@@ -246,6 +246,86 @@ do_stop() {
   rm -f "$STATE_DIR/current_pod"
 }
 
+recover_count() { cat "$STATE_DIR/recover_$(today | tr -d -)" 2>/dev/null || echo 0; }
+
+# health_recover : 당일 MAX_RECOVER 회까지 장애 Pod 삭제 → 새 Pod 생성
+health_recover() {
+  local day n
+  day=$(today | tr -d -)
+  n=$(recover_count)
+  if [ "$n" -ge "$MAX_RECOVER" ]; then
+    touch "$STATE_DIR/gave_up_$day"
+    log_event HEALTH gave_up --argjson recover_count_today "$n"
+    notify "RunPod recovery gave up" "오늘 자동 복구를 ${n}회 시도했지만 실패했습니다. 원인을 확인한 뒤 'pod-start.sh --force'를 실행하세요."
+    return 0
+  fi
+  echo $((n + 1)) > "$STATE_DIR/recover_$day"
+  echo 0 > "$STATE_DIR/health_fail"
+  if [ -f "$STATE_DIR/current_pod" ]; then
+    # 삭제 실패 시 새 Pod를 만들면 이중 과금 → 중단 (do_stop 이 이미 알림)
+    do_stop replaced || return 0
+  else
+    upstream_off || true
+  fi
+  if do_start health; then
+    notify "RunPod recovered" "자동 복구 완료: $(jq -r '.pod_id + " (" + .gpu + ")"' "$STATE_DIR/current_pod")"
+  else
+    notify "RunPod recovery failed" "자동 복구 $((n + 1))회차 실패. 2분 뒤 다음 점검에서 다시 시도합니다."
+  fi
+}
+
+do_health() {
+  local day fail cur id gpu rc st status="" code check detail
+  day=$(today | tr -d -)
+  if [ -f "$STATE_DIR/maintenance" ] || [ -f "$STATE_DIR/gave_up_$day" ]; then return 0; fi
+
+  if [ ! -f "$STATE_DIR/current_pod" ]; then
+    log_event HEALTH no_pod --argjson recover_count_today "$(recover_count)"
+    health_recover
+    return 0
+  fi
+  fail=$(cat "$STATE_DIR/health_fail" 2>/dev/null || echo 0)
+  cur=$(cat "$STATE_DIR/current_pod")
+  id=$(jq -r .pod_id <<<"$cur")
+  gpu=$(jq -r .gpu <<<"$cur")
+
+  # 점검 A: RunPod 플랫폼 상태 (API 장애 시 판정 보류)
+  rc=0
+  st=$(rp GET "/pods/$id" 2>/dev/null) || rc=$?
+  if [ "$rc" -eq 4 ]; then
+    status=NOT_FOUND
+  elif [ "$rc" -eq 0 ]; then
+    status=$(jq -r '.desiredStatus // "RUNNING"' <<<"$st" 2>/dev/null || echo RUNNING)
+  fi
+
+  if [ -n "$status" ] && [ "$status" != RUNNING ]; then
+    check=A
+    detail="pod status $status"
+    fail=$HEALTH_FAIL_LIMIT
+  else
+    # 점검 B: vLLM 응답
+    code=$(vllm_status "$id-8000.proxy.runpod.net")
+    if [ "$code" = 200 ]; then
+      if [ "$fail" -gt 0 ]; then log_event HEALTH recovered_self --arg pod_id "$id" --argjson fail_count "$fail"; fi
+      echo 0 > "$STATE_DIR/health_fail"
+      return 0
+    fi
+    fail=$((fail + 1))
+    echo "$fail" > "$STATE_DIR/health_fail"
+    check=B
+    detail="http $code"
+    if [ "$fail" -eq 1 ]; then
+      log_event HEALTH degraded --arg pod_id "$id" --arg gpu "$gpu" --arg check B --arg detail "$detail" --argjson fail_count 1
+    fi
+    if [ "$fail" -lt "$HEALTH_FAIL_LIMIT" ]; then return 0; fi
+  fi
+
+  log_event HEALTH down --arg pod_id "$id" --arg gpu "$gpu" --arg check "$check" --arg detail "$detail" \
+    --argjson fail_count "$fail" --argjson recover_count_today "$(recover_count)"
+  notify "RunPod DOWN" "RunPod 장애 감지: pod $id ($gpu), 점검 $check, $detail. 자동 복구를 시작합니다."
+  health_recover
+}
+
 if [ -n "${VOC_STUB:-}" ]; then
   # shellcheck disable=SC1090
   . "$VOC_STUB"
