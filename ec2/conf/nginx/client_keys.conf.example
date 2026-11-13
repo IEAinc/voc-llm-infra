@@ -1,0 +1,3 @@
+# 고객사 API 키. 한 줄에 하나: "Bearer <키>" 1;
+# 키 생성: openssl rand -hex 32
+"Bearer REPLACE_WITH_CUSTOMER_KEY" 1;
