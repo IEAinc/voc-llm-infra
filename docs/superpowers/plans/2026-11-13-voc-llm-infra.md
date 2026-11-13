@@ -1727,11 +1727,9 @@ sudo nano /opt/voc-llm/.env         # 값 입력
 - RunPod 관련 값은 Task 7에서 채운다
 
 ```bash
-sudo bash ~/ec2/install.sh          # 2회차: 전체 설치
-openssl rand -hex 32                # 고객사 키 생성
-sudo nano /etc/nginx/voc-llm/client_keys.conf   # "Bearer <고객사키>" 1;
-sudo systemctl reload nginx
+sudo bash ~/ec2/install.sh          # 2회차: 전체 설치. 최초 설치 시 고객사 키를 무작위 생성해 화면에 1회 출력
 ```
+출력된 고객사 키를 안전한 경로로 고객사에 전달한다. 키 추가/교체는 `/etc/nginx/voc-llm/client_keys.conf` 수정 후 `sudo systemctl reload nginx`. (구현은 feat/task-5 cdc3507 기준. 위 Task 5 본문의 placeholder 예시는 구현에서 대체됨)
 
 - [ ] **Step 6: 설치 결과 검증 (관리자 PC에서)**
 
