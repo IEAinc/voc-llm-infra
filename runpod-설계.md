@@ -103,6 +103,21 @@ AWS `pod-start.sh`가 `POST https://rest.runpod.io/v1/pods`로 보내는 내용�
    - 기동 소요시간 (START 로그의 `ready_sec`)
 4. 품질이 동률이면 기동 시간이 짧고 처리 속도가 빠른 모델을 고른다. 선정 결과는 `.env`의 `MODEL_ID` 하나로 반영된다.
 
+### 5.2 1차 평가 (가상 VOC 30건, 2026-11-13)
+
+실제 VOC 샘플이 오기 전, 가상 VOC 30건(`eval/samples-synthetic.jsonl`, 분류/요약/답변 초안 각 10건)으로 실행했다. 4개 모두 A40, EU-SE-1, vLLM v0.33.0, temperature 0, `max-model-len` 32768. Qwen 2종은 `enable_thinking=false`, `--reasoning-parser qwen3`.
+
+| 모델 | 기동(ready) | 첫 글자 평균 | 생성 속도 평균 | 건당 평균 | 분류 JSON 형식 |
+|---|---|---|---|---|---|
+| gemma31 (`google/gemma-4-31B-it-qat-w4a16-ct`) | 216초 | 0.84초 | 54자/초 | 4.0초 | 10/10 |
+| gemma26 (`cyankiwi/gemma-4-26B-A4B-it-qat-AWQ-INT4`) | 199초 | 0.77초 | 207자/초 | 1.7초 | 10/10 |
+| qwen35 (`QuantTrio/Qwen3.6-35B-A3B-AWQ`) | 311초 | 0.71초 | 194자/초 | 1.6초 | 10/10 |
+| qwen27 (`cyankiwi/Qwen3.8-27B-AWQ-INT4`) | 307초 | 0.85초 | 68자/초 | 3.2초 | 10/10 |
+
+- 4개 모두 생각 과정 노출, 빈 응답, 분류 JSON 형식 오류가 없었다.
+- 답변 초안에서 Qwen 2종은 확인되지 않은 조치를 진행 중인 것처럼 쓰는 경우가 있었다("담당 부서와 협의 중입니다", "점검 일정을 조율하고 있으며"). qwen35는 지시문 문장("확인되지 않은 사실에 대한 약속은 드릴 수 없으나")을 그대로 답변에 넣었다. Gemma 2종은 "확인 후 안내" 원칙을 지켰다.
+- 품질 최종 판단은 `eval/results/blind.csv` 담당자 블라인드 평가와 실제 VOC 재평가로 한다.
+
 ## 6. 보안
 
 - Pod에는 SSH 포트와 Jupyter를 열지 않는다. `ports`에는 `8000/http`만 둔다.

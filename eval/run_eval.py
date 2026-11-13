@@ -28,7 +28,8 @@ def call(base: str, key: str, messages: list, max_tokens: int):
     body = json.dumps({"model": "voc-llm", "messages": messages, "temperature": 0,
                        "max_tokens": max_tokens, "stream": True}).encode()
     req = urllib.request.Request(f"{base}/v1/chat/completions", data=body, method="POST", headers={
-        "Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+        "Authorization": f"Bearer {key}", "Content-Type": "application/json",
+        "User-Agent": "voc-llm-eval/1.0"})  # RunPod 프록시(Cloudflare)가 Python-urllib 기본 UA 를 403 차단
     t0 = time.monotonic()
     ttft, parts = None, []
     with urllib.request.urlopen(req, timeout=300) as resp:
