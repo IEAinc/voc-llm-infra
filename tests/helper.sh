@@ -9,7 +9,7 @@ setup() {
   export T
   export VOC_HOME="$T/home" LOG_FILE="$T/pod.log" LOCK_FILE="$T/lock" UPSTREAM_CONF="$T/upstream.conf"
   export VOC_NO_RELOAD=1 VOC_STUB="$ROOT/tests/stub.sh" VOC_TODAY=2026-11-16
-  export READY_POLL_SEC=15 READY_TIMEOUT_SEC=60 CREATE_RETRIES=3 CREATE_RETRY_SEC=600
+  export FAKE_CLOCK=1 READY_POLL_SEC=15 READY_TIMEOUT_SEC=60 CREATE_RETRIES=3 CREATE_RETRY_SEC=600
   mkdir -p "$VOC_HOME/state"
   printf '# comment\nNVIDIA RTX A6000\n\nNVIDIA A40\nNVIDIA L40\n' > "$VOC_HOME/gpu-priority.txt"
   : > "$VOC_HOME/holidays.txt"

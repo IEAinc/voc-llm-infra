@@ -47,6 +47,23 @@ t_start_not_ready_deletes_pod() {
   assert_no_file "$VOC_HOME/state/current_pod"
 }
 
+t_start_not_ready_counts_slow_checks() {
+  FAKE_VLLM_CODE=000 FAKE_VLLM_DELAY=20 start && fail "should fail"
+  assert_eq "$(events)" "START:failed_not_ready" "events"
+  [ "$(calls_count 'VLLM ')" -le 3 ] || fail "too many vllm checks: $(calls_count 'VLLM ')"
+  [ "$(last .waited_sec)" -ge 60 ] || fail "waited_sec $(last .waited_sec) < 60"
+}
+
+t_start_abort_deletes_pod() {
+  FAKE_ABORT_AFTER_CREATE=1 start && fail "should abort"
+  assert_eq "$(last .result)" failed_aborted "result"
+  assert_eq "$(last .pod_id)" pod1 "pod_id"
+  assert_eq "$(calls_count 'RP DELETE /pods/pod1')" 1 "pod deleted"
+  assert_eq "$(calls_count 'NOTIFY START failed: aborted')" 1 "notify"
+  assert_no_file "$VOC_HOME/state/current_pod"
+  assert_file_has "$UPSTREAM_CONF" "return 503"
+}
+
 t_start_skips_holiday() {
   echo 2026-11-16 >> "$VOC_HOME/holidays.txt"
   start
@@ -77,4 +94,5 @@ t_start_resets_recover_counters() {
 }
 
 run_tests t_start_ok t_start_fallback_to_stage2 t_start_no_gpu t_start_not_ready_deletes_pod \
+  t_start_not_ready_counts_slow_checks t_start_abort_deletes_pod \
   t_start_skips_holiday t_start_force_on_holiday t_start_already_running t_start_resets_recover_counters

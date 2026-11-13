@@ -5,7 +5,12 @@
 #   FAKE_DELETE_RC        DELETE 반환값 (기본 0)
 #   FAKE_VLLM_CODE        vllm_status 기본 응답 (기본 200)
 #   FAKE_VLLM_BAD_HOST    이 host 에 대해서만 000 응답
-sleep_s() { echo "SLEEP $1" >> "$T/calls"; }
+#   FAKE_CLOCK            설정 시 now_epoch 가 가짜 시계(sleep_s/vllm_status 가 진행시킴)
+#   FAKE_VLLM_DELAY       vllm_status 1회당 소요 초 (기본 0)
+#   FAKE_ABORT_AFTER_CREATE  vllm_status 가 부모 셸에 SIGTERM 을 보낸다
+_tick() { echo $(($(cat "$T/clock" 2>/dev/null || echo 0) + $1)) > "$T/clock"; }
+if [ -n "${FAKE_CLOCK:-}" ]; then now_epoch() { echo $((1800000000 + $(cat "$T/clock" 2>/dev/null || echo 0))); }; fi
+sleep_s() { echo "SLEEP $1" >> "$T/calls"; _tick "$1"; }
 notify()  { echo "NOTIFY $1" >> "$T/calls"; }
 
 rp() {
@@ -32,6 +37,8 @@ rp() {
 
 vllm_status() {
   echo "VLLM $1" >> "$T/calls"
+  _tick "${FAKE_VLLM_DELAY:-0}"
+  if [ -n "${FAKE_ABORT_AFTER_CREATE:-}" ]; then kill -TERM $$; sleep 0.3; fi
   if [ -n "${FAKE_VLLM_BAD_HOST:-}" ] && [ "$1" = "$FAKE_VLLM_BAD_HOST" ]; then echo 000; return; fi
   echo "${FAKE_VLLM_CODE:-200}"
 }
