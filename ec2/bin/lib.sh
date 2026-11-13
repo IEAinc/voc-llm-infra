@@ -114,6 +114,90 @@ pod_spec() {
 
 # --- 이 아래에 Task 2~4 함수를 추가한다. 스텁 로딩 줄은 항상 파일 마지막에 둔다. ---
 
+# create_pod : 1단계(볼륨 DC) CREATE_RETRIES 회 → 실패 시 2단계(볼륨 없음) 1회
+create_pod() {
+  local i out
+  CREATE_FAILS=0
+  if [ -n "${NETWORK_VOLUME_ID:-}" ]; then
+    for ((i = 0; i < CREATE_RETRIES; i++)); do
+      if [ "$i" -gt 0 ]; then sleep_s "$CREATE_RETRY_SEC"; fi
+      if out=$(rp POST /pods "$(pod_spec 1)") && pod_id_of "$out" >/dev/null; then
+        CREATE_STAGE=1
+        printf '%s' "$out" > "$STATE_DIR/created.json"
+        return 0
+      fi
+      CREATE_FAILS=$((CREATE_FAILS + 1))
+    done
+  fi
+  if out=$(rp POST /pods "$(pod_spec 2)") && pod_id_of "$out" >/dev/null; then
+    CREATE_STAGE=2
+    printf '%s' "$out" > "$STATE_DIR/created.json"
+    return 0
+  fi
+  CREATE_FAILS=$((CREATE_FAILS + 1))
+  return 1
+}
+
+# do_start TRIGGER(cron|manual|health)
+do_start() {
+  local trigger=$1 requested_at t0 created_at created_epoch pod info id gpu dc cost host waited code
+  requested_at=$(now_iso)
+  t0=$(now_epoch)
+  if [ "$trigger" != health ]; then rm -f "$STATE_DIR"/recover_* "$STATE_DIR"/gave_up_*; fi
+
+  if ! create_pod; then
+    upstream_off || true
+    log_event START failed_no_gpu --arg trigger "$trigger" --arg requested_at "$requested_at" --argjson retries "$CREATE_FAILS"
+    notify "START failed: no GPU" "Secure 48GB GPU를 확보하지 못했습니다(1·2단계 모두 실패, 시도 ${CREATE_FAILS}회)."
+    return 1
+  fi
+  created_at=$(now_iso)
+  created_epoch=$(now_epoch)
+  pod=$(cat "$STATE_DIR/created.json")
+  id=$(pod_id_of "$pod")
+
+  # 생성 응답에 GPU/DC 정보가 없을 수 있어 GET 결과와 합친다
+  info=$(rp GET "/pods/$id" 2>/dev/null) || info='{}'
+  info=$(jq -cs '.[0] * .[1]' <<<"$pod$info" 2>/dev/null) || info=$pod
+  gpu=$(jq -r '.machine.gpuTypeId // .machine.gpuDisplayName // .gpuTypeId // "unknown"' <<<"$info")
+  dc=$(jq -r '.machine.dataCenterId // .dataCenterId // "unknown"' <<<"$info")
+  cost=$(jq -r '.costPerHr // .adjustedCostPerHr // 0' <<<"$info")
+  host="$id-8000.proxy.runpod.net"
+
+  waited=0
+  while :; do
+    code=$(vllm_status "$host")
+    if [ "$code" = 200 ]; then break; fi
+    if [ "$waited" -ge "$READY_TIMEOUT_SEC" ]; then
+      rp DELETE "/pods/$id" >/dev/null 2>&1 || true
+      upstream_off || true
+      log_event START failed_not_ready --arg trigger "$trigger" --arg requested_at "$requested_at" \
+        --arg pod_id "$id" --arg gpu "$gpu" --argjson waited_sec "$waited" --arg last_http "$code"
+      notify "START failed: vLLM not ready" "Pod $id ($gpu)가 ${READY_TIMEOUT_SEC}초 안에 준비되지 않아 삭제했습니다. 마지막 응답: $code. RunPod 콘솔에서 Pod가 지워졌는지 확인하세요."
+      return 1
+    fi
+    sleep_s "$READY_POLL_SEC"
+    waited=$((waited + READY_POLL_SEC))
+  done
+
+  if ! upstream_on "$host"; then
+    rp DELETE "/pods/$id" >/dev/null 2>&1 || true
+    upstream_off || true
+    log_event START failed_reload --arg trigger "$trigger" --arg pod_id "$id" --arg gpu "$gpu"
+    notify "START failed: nginx reload" "nginx reload 실패로 Pod $id를 삭제했습니다. 'nginx -t' 결과를 확인하세요."
+    return 1
+  fi
+
+  jq -n --arg pod_id "$id" --arg gpu "$gpu" --arg datacenter "$dc" --argjson cost_per_hr "$cost" \
+    --arg started_at "$created_at" --argjson created_epoch "$created_epoch" --arg endpoint "https://$host" \
+    '$ARGS.named' > "$STATE_DIR/current_pod"
+  echo 0 > "$STATE_DIR/health_fail"
+  log_event START ok --arg trigger "$trigger" --arg requested_at "$requested_at" --arg ready_at "$(now_iso)" \
+    --argjson ready_sec "$(($(now_epoch) - t0))" --arg pod_id "$id" --arg gpu "$gpu" --arg datacenter "$dc" \
+    --argjson stage "$CREATE_STAGE" --argjson retries "$CREATE_FAILS" --argjson cost_per_hr "$cost" \
+    --arg model "$MODEL_ID" --arg endpoint "https://$host"
+}
+
 if [ -n "${VOC_STUB:-}" ]; then
   # shellcheck disable=SC1090
   . "$VOC_STUB"
