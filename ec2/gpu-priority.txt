@@ -1,7 +1,9 @@
-# RunPod gpuTypeId, 위에서부터 우선 (비용 순). '#' 줄과 빈 줄은 무시된다.
-# RTX PRO 6000 MIG 48GB 의 ID는 Task 7에서 확인한 뒤 맨 아래에 추가한다.
-NVIDIA RTX A6000
+# RunPod gpuTypeId, 위에서부터 우선 (비용 순, 2026-11-13 Secure 단가). '#' 줄과 빈 줄은 무시된다.
+# $0.59 / $0.69 / $0.82 / $0.96 / $1.09 / $1.09
 NVIDIA A40
+NVIDIA RTX A6000
 NVIDIA L40
-NVIDIA RTX 6000 Ada Generation
+NVIDIA RTX PRO 5000 Blackwell
 NVIDIA L40S
+NVIDIA RTX 6000 Ada Generation
+# NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 2g.48gb  ($1.39) REST API gpuTypeIds enum 에 없어 생성 불가 (2026-11-13)
