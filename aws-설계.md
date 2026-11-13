@@ -17,7 +17,7 @@
 | 방향 | 포트 | 소스 | 용도 |
 |---|---|---|---|
 | Inbound | 443 | 고객사 VOC 서버 공인 IP | API |
-| Inbound | 443 | Route 53 health checker IP 대역 | 외부 생존 확인 (9.3절). `ip-ranges.json`의 `ROUTE53_HEALTHCHECKS` 대역 사용 |
+| Inbound | 443 | Route 53 health checker IP 대역 | 외부 생존 확인 (9.3절). `ip-ranges.json`의 `ROUTE53_HEALTHCHECKS` 대역 사용. 실제 점검 IP는 `GLOBAL` 대역(15.177.0.0/18)이므로 반드시 포함 |
 | Inbound | 80 | 0.0.0.0/0 | certbot 인증과 갱신 전용 (나머지는 443으로 리다이렉트) |
 | Inbound | 22 | 관리자 IP | SSH |
 | Outbound | 443 | 0.0.0.0/0 | RunPod API, RunPod proxy |

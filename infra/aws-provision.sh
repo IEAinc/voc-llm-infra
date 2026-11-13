@@ -41,9 +41,10 @@ if [ "$SG" = None ]; then
     "IpProtocol=tcp,FromPort=443,ToPort=443,IpRanges=[{CidrIp=$ADMIN_CIDR,Description=admin}]" \
     "IpProtocol=tcp,FromPort=80,ToPort=80,IpRanges=[{CidrIp=0.0.0.0/0,Description=certbot}]" \
     "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=$ADMIN_CIDR,Description=admin-ssh}]" >/dev/null
-  # Route 53 health checker: Task 9 에서 health check 리전을 이 3곳으로 제한한다
+  # Route 53 health checker: Task 9 에서 health check 리전을 이 3곳으로 제한한다.
+  # 실제 점검 IP 는 GLOBAL 대역(15.177.0.0/18)에서 오므로 GLOBAL 도 연다
   for cidr in $(curl -s https://ip-ranges.amazonaws.com/ip-ranges.json | jq -r \
-      '.prefixes[] | select(.service=="ROUTE53_HEALTHCHECKS" and (.region=="us-east-1" or .region=="ap-northeast-1" or .region=="ap-southeast-1")) | .ip_prefix' | tr -d '\r'); do
+      '.prefixes[] | select(.service=="ROUTE53_HEALTHCHECKS" and (.region=="GLOBAL" or .region=="us-east-1" or .region=="ap-northeast-1" or .region=="ap-southeast-1")) | .ip_prefix' | tr -d '\r'); do
     aws ec2 authorize-security-group-ingress --group-id "$SG" --ip-permissions \
       "IpProtocol=tcp,FromPort=443,ToPort=443,IpRanges=[{CidrIp=$cidr,Description=route53-hc}]" >/dev/null
   done
