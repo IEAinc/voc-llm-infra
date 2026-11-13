@@ -355,6 +355,7 @@ do_holiday_sync() {
   next=$((year + 1))
   for ((i = 0; i < HOLIDAY_RETRIES; i++)); do
     if [ "$i" -gt 0 ]; then sleep_s "$HOLIDAY_RETRY_SEC"; fi
+    # -ge 10: 정상 여부 최소 점검선 (한국 공휴일은 연 15일 이상)
     if raw=$(holiday_api "$year") && cur=$(holiday_dates "$raw") && [ "$(wc -l <<<"$cur")" -ge 10 ]; then break; fi
     cur=""
   done
@@ -364,7 +365,13 @@ do_holiday_sync() {
     notify "Holiday sync failed" "공휴일 API 갱신에 ${HOLIDAY_RETRIES}회 실패했습니다. 다음 갱신이 성공할 때까지 공휴일 판정을 끄고 평일에는 모두 운영합니다(holidays.txt 수동 휴무일은 계속 적용). HOLIDAY_API_KEY 확인 후 holiday-sync.sh 를 수동 실행하세요."
     return 1
   fi
-  if raw=$(holiday_api "$next") && nxt=$(holiday_dates "$raw"); then nn=$(wc -l <<<"$nxt"); else nxt=""; fi
+  if raw=$(holiday_api "$next") && jq -e '.response.header.resultCode == "00"' <<<"$raw" >/dev/null 2>&1; then
+    nxt=$(holiday_dates "$raw") || nxt=""   # 정상 응답 0건 = 미공개, 이월하지 않음
+  else
+    # 내년 조회 실패: 이전에 받아 둔 내년 날짜를 유지
+    nxt=$(grep "^$next" "$VOC_HOME/holidays-api.txt" 2>/dev/null || true)
+  fi
+  if [ -n "$nxt" ]; then nn=$(wc -l <<<"$nxt"); fi
   { printf '%s\n' "$cur"; if [ -n "$nxt" ]; then printf '%s\n' "$nxt"; fi; } | sort -u > "$VOC_HOME/holidays-api.txt.tmp"
   mv "$VOC_HOME/holidays-api.txt.tmp" "$VOC_HOME/holidays-api.txt"
   rm -f "$STATE_DIR/holiday_sync_failed"

@@ -92,7 +92,14 @@ t_holiday_dates_empty_items_string() {
   true
 }
 
-run_tests t_sync_ok_this_and_next_year t_sync_next_year_missing_is_ok t_sync_retries_then_ok \
+t_sync_next_year_fetch_error_keeps_old_next_year() {
+  echo 2027-01-01 > "$(api)"
+  FAKE_HOLIDAY_FAIL_YEAR=2027 sync || fail "this year ok -> sync ok"
+  assert_file_has "$(api)" "2027-01-01"
+  assert_eq "$(last .next_year_count)" 1 "carried count"
+}
+
+run_tests t_sync_next_year_fetch_error_keeps_old_next_year t_sync_ok_this_and_next_year t_sync_next_year_missing_is_ok t_sync_retries_then_ok \
   t_sync_fail_sets_marker_and_notifies t_sync_bad_responses_fail t_sync_fail_keeps_old_file \
   t_sync_success_clears_marker t_api_holiday_skips_start t_failed_week_runs_on_api_holiday \
   t_manual_holiday_applies_even_when_failed t_holiday_dates_single_object_item t_holiday_dates_empty_items_string

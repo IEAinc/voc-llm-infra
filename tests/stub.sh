@@ -45,6 +45,7 @@ vllm_status() {
 
 # FAKE_HOLIDAY_MODE: ok(기본) | fail | badcode | xml | few
 # FAKE_HOLIDAY_FAILS=N : 처음 N번 호출 실패
+# FAKE_HOLIDAY_FAIL_YEAR=YYYY : 이 연도 호출은 항상 실패
 # FAKE_HOLIDAY_MAX_YEAR=YYYY : 이 연도보다 큰 해는 0건 응답 (내년 자료 미공개 상황)
 fake_holidays() {  # fake_holidays YEAR COUNT : isHoliday=Y COUNT 개 + isHoliday=N 1개
   jq -nc --arg y "$1" --argjson c "$2" '
@@ -61,6 +62,7 @@ holiday_api() {
   n=$(cat "$T/hapi_n" 2>/dev/null || echo 0)
   echo $((n + 1)) > "$T/hapi_n"
   if [ "$n" -lt "${FAKE_HOLIDAY_FAILS:-0}" ]; then return 1; fi
+  if [ "$1" = "${FAKE_HOLIDAY_FAIL_YEAR:-}" ]; then return 1; fi
   case "${FAKE_HOLIDAY_MODE:-ok}" in
     fail) return 1 ;;
     badcode) echo '{"response":{"header":{"resultCode":"30","resultMsg":"SERVICE_KEY_IS_NOT_REGISTERED_ERROR"}}}' ;;
