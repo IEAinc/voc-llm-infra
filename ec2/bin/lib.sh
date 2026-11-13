@@ -213,6 +213,39 @@ do_start() {
     --arg model "$MODEL_ID" --arg endpoint "https://$host"
 }
 
+# do_stop LABEL(ok|replaced) : 먼저 upstream 차단 → 삭제 3회 시도 → STOP 로그
+do_stop() {
+  local label=${1:-ok} cur id gpu cost created i rc=1 sec uptime est
+  upstream_off || true
+  if [ ! -f "$STATE_DIR/current_pod" ]; then
+    log_event STOP no_pod
+    return 0
+  fi
+  cur=$(cat "$STATE_DIR/current_pod")
+  id=$(jq -r .pod_id <<<"$cur")
+  gpu=$(jq -r .gpu <<<"$cur")
+  cost=$(jq -r .cost_per_hr <<<"$cur")
+  created=$(jq -r .created_epoch <<<"$cur")
+
+  for i in 1 2 3; do
+    rc=0
+    rp DELETE "/pods/$id" >/dev/null 2>&1 || rc=$?
+    if [ "$rc" -eq 0 ] || [ "$rc" -eq 4 ]; then break; fi
+    if [ "$i" -lt 3 ]; then sleep_s 30; fi
+  done
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 4 ]; then
+    log_event STOP failed_delete --arg pod_id "$id" --arg gpu "$gpu"
+    notify "STOP failed: pod not deleted" "Pod $id 삭제에 3회 실패했습니다. 과금이 계속되므로 RunPod 콘솔에서 직접 삭제한 뒤 /opt/voc-llm/state/current_pod 를 지우세요."
+    return 1
+  fi
+
+  sec=$(($(now_epoch) - created))
+  read -r uptime est < <(awk -v s="$sec" -v c="$cost" 'BEGIN { printf "%.2f %.2f\n", s / 3600, s / 3600 * c }')
+  log_event STOP "$label" --arg pod_id "$id" --arg gpu "$gpu" --arg started_at "$(jq -r .started_at <<<"$cur")" \
+    --argjson uptime_hr "$uptime" --argjson cost_per_hr "$cost" --argjson est_cost_usd "$est"
+  rm -f "$STATE_DIR/current_pod"
+}
+
 if [ -n "${VOC_STUB:-}" ]; then
   # shellcheck disable=SC1090
   . "$VOC_STUB"
