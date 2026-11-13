@@ -7,3 +7,4 @@ eval/samples.jsonl
 eval/results/
 __pycache__/
 .superpowers/
+infra/*.pem
