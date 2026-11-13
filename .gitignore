@@ -6,3 +6,4 @@ infra/aws.out
 eval/samples.jsonl
 eval/results/
 __pycache__/
+.superpowers/
