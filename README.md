@@ -22,7 +22,7 @@ VOC 시스템 ──HTTPS(고정 도메인)──▶ AWS EC2 t3.small (서울)
                        RunPod Secure Cloud Pod (48GB GPU)
                          vLLM OpenAI 호환 서버 :8000
                          https://{podId}-8000.proxy.runpod.net
-                         Network Volume(/workspace) 에 모델 캐시
+                         기동 시 HuggingFace 에서 모델 다운로드(볼륨 없음)
 ```
 
 ## 3. 확정된 결정
@@ -32,9 +32,9 @@ VOC 시스템 ──HTTPS(고정 도메인)──▶ AWS EC2 t3.small (서울)
 | API 형식 | OpenAI 호환 (`/v1/chat/completions`, `/v1/models`) |
 | 개인정보 | 고객사 VOC 시스템이 마스킹한 뒤 전송한다. 중계서버는 내용을 변환하지 않는다 |
 | GPU 등급 | RunPod Secure Cloud만 사용한다 (Community, Vast.ai는 기능 테스트 용도로만 사용) |
-| 모델 보관 | Network Volume (B안) |
+| 모델 보관 | Network Volume 없음(3안): 기동 시 HuggingFace에서 다운로드, 실측 약 4분 |
 | Pod 수명 | 매일 생성(08:30)하고 매일 삭제(18:00)한다. stop/start 재사용은 하지 않는다 |
-| GPU 우선순위 | 비용 순: RTX A6000 → A40 → L40 → RTX 6000 Ada → L40S → RTX PRO 6000 MIG 48GB |
+| GPU 우선순위 | 비용 순: A40 → RTX A6000 → L40 → RTX PRO 5000 Blackwell → L40S → RTX 6000 Ada (PRO 6000 MIG 48GB는 REST API `gpuTypeIds`에 없어 제외) |
 | 로그 | 시작 시와 종료 시에 각 1줄씩 JSON으로 기록한다 (`/var/log/voc-llm/pod.log`) |
 | 추론 엔진 | vLLM 단일 엔진. 4개 후보 모델을 같은 조건에서 비교한다 |
 | 모델 이름 | `--served-model-name voc-llm`으로 고정한다. 모델을 교체해도 고객사 요청의 `model` 값은 그대로다 |
@@ -49,19 +49,18 @@ VOC 시스템 ──HTTPS(고정 도메인)──▶ AWS EC2 t3.small (서울)
 | EC2 t3.small (서울) | $0.026 × 730h | 약 $19.0 |
 | EC2 공인 IPv4 (EIP) | $0.005 × 730h | 약 $3.7 |
 | EBS gp3 20GB | 약 $0.0912/GB | 약 $1.8 |
-| RunPod GPU (1순위 A6000) | $0.59 × 약 200h (평일 21일 × 9.5h) | 약 $118 |
-| RunPod Network Volume 100GB | $0.07/GB | $7.0 |
+| RunPod GPU (1순위 A40) | $0.59 × 약 200h (평일 21일 × 9.5h) | 약 $118 |
 | EC2 모니터링 (CloudWatch, Route 53 health check) | aws-설계.md 9.5절 | 약 $3.3 |
-| **합계** | | **약 $153** |
+| **합계** | | **약 $146** |
 
 - RunPod 시간은 08:30~18:00, 9.5시간으로 계산했다. 기동 대기 30분이 포함되어 있다.
-- 대체 GPU로 기동한 날은 그날 단가로 과금된다. 최악은 PRO 6000 MIG $1.29/h이다. 실제 비용은 종료 로그의 `est_cost_usd`를 합산해서 확인한다.
+- 대체 GPU로 기동한 날은 그날 단가로 과금된다. 1순위 A40 $0.59, 최악은 RTX 6000 Ada·L40S $1.09/h이다(`gpu-priority.txt` 기준). 실제 비용은 종료 로그의 `est_cost_usd`를 합산해서 확인한다.
 - 네트워크 송신 비용은 텍스트 응답 위주라 미미하므로 제외했다.
 
 ## 5. 문서 구성
 
 - [aws-설계.md](aws-설계.md): EC2, nginx, cron 스크립트, 로그 형식, 운영 절차, 자원 및 생존 모니터링
-- [runpod-설계.md](runpod-설계.md): Network Volume, Pod 생성 사양, vLLM 설정, 모델 후보, GPU 호환성
+- [runpod-설계.md](runpod-설계.md): 모델 로딩, Pod 생성 사양, vLLM 설정, 모델 후보, GPU 호환성
 
 ## 6. 범위 외 (1차)
 

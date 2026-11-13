@@ -2,12 +2,12 @@
 . "$(dirname "$0")/helper.sh"
 lib() { ( . "$BIN/lib.sh"; "$@" ); }
 
-t_pod_spec_stage1() {
-  local j; j=$(lib pod_spec 1)
+t_pod_spec() {
+  local j; j=$(lib pod_spec)
   assert_eq "$(jq -r .cloudType <<<"$j")" SECURE "cloudType"
-  assert_eq "$(jq -r .networkVolumeId <<<"$j")" vol-test "networkVolumeId"
-  assert_eq "$(jq -r .volumeMountPath <<<"$j")" /workspace "volumeMountPath"
-  assert_eq "$(jq -r .env.HF_HOME <<<"$j")" /workspace/hf "HF_HOME"
+  assert_eq "$(jq -r 'has("networkVolumeId")' <<<"$j")" false "no volume"
+  assert_eq "$(jq -r 'has("volumeMountPath")' <<<"$j")" false "no mount"
+  assert_eq "$(jq -r .env.HF_HOME <<<"$j")" /root/.cache/huggingface "HF_HOME"
   assert_eq "$(jq -r .env.VLLM_API_KEY <<<"$j")" test-vllm "VLLM_API_KEY"
   assert_eq "$(jq -r '.gpuTypeIds|join(",")' <<<"$j")" "NVIDIA RTX A6000,NVIDIA A40,NVIDIA L40" "gpu order, comments/blank ignored"
   assert_eq "$(jq -r .gpuTypePriority <<<"$j")" custom "gpuTypePriority"
@@ -17,15 +17,8 @@ t_pod_spec_stage1() {
     "--model org/test-model --served-model-name voc-llm --host 0.0.0.0 --port 8000 --max-model-len 32768 --gpu-memory-utilization 0.90 --kv-cache-dtype auto" "dockerStartCmd"
 }
 
-t_pod_spec_stage2() {
-  local j; j=$(lib pod_spec 2)
-  assert_eq "$(jq -r 'has("networkVolumeId")' <<<"$j")" false "no volume in stage 2"
-  assert_eq "$(jq -r 'has("volumeMountPath")' <<<"$j")" false "no mount in stage 2"
-  assert_eq "$(jq -r .env.HF_HOME <<<"$j")" /root/.cache/huggingface "HF_HOME stage 2"
-}
-
 t_pod_spec_extra_args() {
-  local j; j=$(VLLM_EXTRA_ARGS='--limit-mm-per-prompt {"image":0}' lib pod_spec 1)
+  local j; j=$(VLLM_EXTRA_ARGS='--limit-mm-per-prompt {"image":0}' lib pod_spec)
   assert_eq "$(jq -r '.dockerStartCmd[-2:]|join(" ")' <<<"$j")" '--limit-mm-per-prompt {"image":0}' "extra args appended"
 }
 
@@ -55,8 +48,8 @@ t_holiday() {
   true
 }
 
-t_repo_gpu_priority_first_is_a6000() {
-  assert_eq "$(grep -v '^#' "$ROOT/ec2/gpu-priority.txt" | grep -v '^$' | head -1)" "NVIDIA RTX A6000" "repo gpu-priority first line"
+t_repo_gpu_priority_first_is_a40() {
+  assert_eq "$(grep -v '^#' "$ROOT/ec2/gpu-priority.txt" | grep -v '^$' | head -1)" "NVIDIA A40" "repo gpu-priority first line"
 }
 
-run_tests t_pod_spec_stage1 t_pod_spec_stage2 t_pod_spec_extra_args t_upstream_on_off t_log_event t_holiday t_repo_gpu_priority_first_is_a6000
+run_tests t_pod_spec t_pod_spec_extra_args t_upstream_on_off t_log_event t_holiday t_repo_gpu_priority_first_is_a40

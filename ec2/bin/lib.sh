@@ -9,7 +9,7 @@ LOCK_FILE="${LOCK_FILE:-/var/lock/voc-llm.lock}"
 UPSTREAM_CONF="${UPSTREAM_CONF:-/etc/nginx/voc-llm/upstream.conf}"
 RUNPOD_API="${RUNPOD_API:-https://rest.runpod.io/v1}"
 READY_POLL_SEC="${READY_POLL_SEC:-15}"
-READY_TIMEOUT_SEC="${READY_TIMEOUT_SEC:-1500}"
+READY_TIMEOUT_SEC="${READY_TIMEOUT_SEC:-900}"
 CREATE_RETRIES="${CREATE_RETRIES:-3}"
 CREATE_RETRY_SEC="${CREATE_RETRY_SEC:-600}"
 HEALTH_FAIL_LIMIT="${HEALTH_FAIL_LIMIT:-3}"
@@ -91,10 +91,10 @@ vllm_status() {
 
 pod_id_of() { jq -er '.id // empty' <<<"$1" 2>/dev/null; }
 
-# pod_spec STAGE : 1 = Network Volume 사용, 2 = 볼륨 없음(HF 에서 다운로드)
+# pod_spec : 볼륨 없음. 기동 시 HF 에서 모델을 컨테이너 디스크로 다운로드
 pod_spec() {
-  jq -n --arg stage "$1" --rawfile gpus "$VOC_HOME/gpu-priority.txt" \
-    --arg image "$VLLM_IMAGE" --arg model "$MODEL_ID" --arg vol "${NETWORK_VOLUME_ID:-}" \
+  jq -n --rawfile gpus "$VOC_HOME/gpu-priority.txt" \
+    --arg image "$VLLM_IMAGE" --arg model "$MODEL_ID" \
     --arg hf "$HF_TOKEN" --arg key "$VLLM_API_KEY" --arg maxlen "${MAX_MODEL_LEN:-32768}" \
     --arg extra "${VLLM_EXTRA_ARGS:-}" '
     {
@@ -109,40 +109,30 @@ pod_spec() {
       env: {
         HF_TOKEN: $hf,
         VLLM_API_KEY: $key,
-        HF_HOME: (if $stage == "1" then "/workspace/hf" else "/root/.cache/huggingface" end)
+        HF_HOME: "/root/.cache/huggingface"
       },
       dockerStartCmd: (["--model", $model, "--served-model-name", "voc-llm",
                         "--host", "0.0.0.0", "--port", "8000",
                         "--max-model-len", $maxlen, "--gpu-memory-utilization", "0.90",
                         "--kv-cache-dtype", "auto"]
                        + ($extra | split(" ") | map(select(length > 0))))
-    }
-    + (if $stage == "1" then {networkVolumeId: $vol, volumeMountPath: "/workspace"} else {} end)'
+    }'
 }
 
 # --- 이 아래에 Task 2~4 함수를 추가한다. 스텁 로딩 줄은 항상 파일 마지막에 둔다. ---
 
-# create_pod : 1단계(볼륨 DC) CREATE_RETRIES 회 → 실패 시 2단계(볼륨 없음) 1회
+# create_pod : CREATE_RETRIES 회 시도, 사이에 CREATE_RETRY_SEC 대기
 create_pod() {
   local i out
   CREATE_FAILS=0
-  if [ -n "${NETWORK_VOLUME_ID:-}" ]; then
-    for ((i = 0; i < CREATE_RETRIES; i++)); do
-      if [ "$i" -gt 0 ]; then sleep_s "$CREATE_RETRY_SEC"; fi
-      if out=$(rp POST /pods "$(pod_spec 1)") && pod_id_of "$out" >/dev/null; then
-        CREATE_STAGE=1
-        printf '%s' "$out" > "$STATE_DIR/created.json"
-        return 0
-      fi
-      CREATE_FAILS=$((CREATE_FAILS + 1))
-    done
-  fi
-  if out=$(rp POST /pods "$(pod_spec 2)") && pod_id_of "$out" >/dev/null; then
-    CREATE_STAGE=2
-    printf '%s' "$out" > "$STATE_DIR/created.json"
-    return 0
-  fi
-  CREATE_FAILS=$((CREATE_FAILS + 1))
+  for ((i = 0; i < CREATE_RETRIES; i++)); do
+    if [ "$i" -gt 0 ]; then sleep_s "$CREATE_RETRY_SEC"; fi
+    if out=$(rp POST /pods "$(pod_spec)") && pod_id_of "$out" >/dev/null; then
+      printf '%s' "$out" > "$STATE_DIR/created.json"
+      return 0
+    fi
+    CREATE_FAILS=$((CREATE_FAILS + 1))
+  done
   return 1
 }
 
@@ -167,7 +157,7 @@ do_start() {
   if ! create_pod; then
     upstream_off || true
     log_event START failed_no_gpu --arg trigger "$trigger" --arg requested_at "$requested_at" --argjson retries "$CREATE_FAILS"
-    notify "START failed: no GPU" "Secure 48GB GPU를 확보하지 못했습니다(1·2단계 모두 실패, 시도 ${CREATE_FAILS}회)."
+    notify "START failed: no GPU" "Secure 48GB GPU를 확보하지 못했습니다(시도 ${CREATE_FAILS}회 모두 실패)."
     return 1
   fi
   created_at=$(now_iso)
@@ -219,7 +209,7 @@ do_start() {
   trap - EXIT INT TERM
   log_event START ok --arg trigger "$trigger" --arg requested_at "$requested_at" --arg ready_at "$(now_iso)" \
     --argjson ready_sec "$(($(now_epoch) - t0))" --arg pod_id "$id" --arg gpu "$gpu" --arg datacenter "$dc" \
-    --argjson stage "$CREATE_STAGE" --argjson retries "$CREATE_FAILS" --argjson cost_per_hr "$cost" \
+    --argjson retries "$CREATE_FAILS" --argjson cost_per_hr "$cost" \
     --arg model "$MODEL_ID" --arg endpoint "https://$host"
 }
 

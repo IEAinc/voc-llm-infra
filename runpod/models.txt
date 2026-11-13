@@ -1,0 +1,4 @@
+google/gemma-4-31B-it-qat-w4a16-ct
+cyankiwi/gemma-4-26B-A4B-it-qat-AWQ-INT4
+QuantTrio/Qwen3.6-35B-A3B-AWQ
+cyankiwi/Qwen3.8-27B-AWQ-INT4

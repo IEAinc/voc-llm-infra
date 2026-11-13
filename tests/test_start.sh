@@ -8,7 +8,6 @@ t_start_ok() {
   assert_eq "$(last .pod_id)" pod1 "pod_id"
   assert_eq "$(last .gpu)" "NVIDIA RTX A6000" "gpu"
   assert_eq "$(last .datacenter)" EU-RO-1 "datacenter"
-  assert_eq "$(last .stage)" 1 "stage"
   assert_eq "$(last .retries)" 0 "retries"
   assert_eq "$(last .cost_per_hr)" 0.59 "cost"
   assert_eq "$(last .model)" org/test-model "model"
@@ -18,21 +17,18 @@ t_start_ok() {
   assert_eq "$(jq -r '.created_epoch|type' "$VOC_HOME/state/current_pod")" number "created_epoch type"
 }
 
-t_start_fallback_to_stage2() {
-  FAKE_CREATE_FAILS=3 start || fail "should succeed in stage 2"
+t_start_retry_then_ok() {
+  FAKE_CREATE_FAILS=2 start || fail "should succeed on 3rd attempt"
   assert_eq "$(last .result)" ok "result"
-  assert_eq "$(last .stage)" 2 "stage"
-  assert_eq "$(last .retries)" 3 "retries"
-  assert_eq "$(last .pod_id)" pod4 "pod_id"
-  assert_eq "$(calls_count 'STAGE 1')" 3 "stage1 attempts"
-  assert_eq "$(calls_count 'STAGE 2')" 1 "stage2 attempts"
-  assert_eq "$(calls_count 'SLEEP 600')" 2 "retry waits between stage1 attempts"
+  assert_eq "$(last .retries)" 2 "retries"
+  assert_eq "$(last .pod_id)" pod3 "pod_id"
+  assert_eq "$(calls_count 'SLEEP 600')" 2 "retry waits"
 }
 
 t_start_no_gpu() {
   FAKE_CREATE_FAILS=99 start && fail "should fail"
   assert_eq "$(events)" "START:failed_no_gpu" "events"
-  assert_eq "$(last .retries)" 4 "attempts"
+  assert_eq "$(last .retries)" 3 "attempts"
   assert_eq "$(calls_count 'NOTIFY START failed: no GPU')" 1 "notify"
   assert_file_has "$UPSTREAM_CONF" "return 503"
   assert_no_file "$VOC_HOME/state/current_pod"
@@ -109,6 +105,6 @@ t_start_resets_recover_counters() {
   assert_no_file "$VOC_HOME/state/gave_up_20261116"
 }
 
-run_tests t_start_ok t_start_fallback_to_stage2 t_start_no_gpu t_start_not_ready_deletes_pod \
+run_tests t_start_ok t_start_retry_then_ok t_start_no_gpu t_start_not_ready_deletes_pod \
   t_start_not_ready_counts_slow_checks t_start_abort_deletes_pod \
   t_start_skips_holiday t_start_force_on_holiday t_start_already_running t_start_already_running_reenables_upstream t_start_already_running_not_ready_restarts t_start_resets_recover_counters

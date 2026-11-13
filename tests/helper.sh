@@ -17,7 +17,6 @@ setup() {
 RUNPOD_API_KEY=test-runpod
 VLLM_API_KEY=test-vllm
 HF_TOKEN=test-hf
-NETWORK_VOLUME_ID=vol-test
 VLLM_IMAGE=vllm/vllm-openai:v9.9.9
 MODEL_ID=org/test-model
 MAX_MODEL_LEN=32768

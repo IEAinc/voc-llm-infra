@@ -20,7 +20,6 @@ rp() {
       local n
       n=$(cat "$T/create_n" 2>/dev/null || echo 0)
       echo $((n + 1)) > "$T/create_n"
-      echo "STAGE $(jq -r 'if has("networkVolumeId") then 1 else 2 end' <<<"$3")" >> "$T/calls"
       if [ "$n" -lt "${FAKE_CREATE_FAILS:-0}" ]; then echo '{"error":"no instances available"}'; return 1; fi
       echo "{\"id\":\"pod$((n + 1))\",\"costPerHr\":0.59,\"machine\":{\"gpuTypeId\":\"NVIDIA RTX A6000\",\"dataCenterId\":\"EU-RO-1\"}}"
       ;;

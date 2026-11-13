@@ -21,7 +21,8 @@
 ## Global Constraints
 
 - RunPod는 `cloudType: "SECURE"`만 사용한다. Community, Vast.ai에는 VOC 데이터를 절대 넣지 않는다.
-- GPU 우선순위(비용 순): `NVIDIA RTX A6000` → `NVIDIA A40` → `NVIDIA L40` → `NVIDIA RTX 6000 Ada Generation` → `NVIDIA L40S` → RTX PRO 6000 MIG 48GB (ID는 Task 7에서 확인)
+- GPU 우선순위(비용 순): `NVIDIA A40` → `NVIDIA RTX A6000` → `NVIDIA L40` → `NVIDIA RTX PRO 5000 Blackwell` → `NVIDIA L40S` → `NVIDIA RTX 6000 Ada Generation` (PRO 6000 MIG 48GB는 REST API `gpuTypeIds` enum에 없어 제외)
+- Network Volume은 쓰지 않는다(3안). Pod는 기동 시 HuggingFace에서 모델을 컨테이너 디스크로 받는다(실측 약 4분).
 - 고객사에 노출하는 모델 이름은 항상 `voc-llm`이다 (`--served-model-name voc-llm`).
 - 양자화는 W4A16 계열(AWQ, compressed-tensors w4a16)만 쓴다. FP8 가중치와 FP8 KV cache는 쓰지 않는다(`--kv-cache-dtype auto`).
 - vLLM 이미지는 버전 태그를 고정한다. `latest`는 금지한다.
@@ -34,7 +35,7 @@
   - `holidays.txt`(수동 휴무일)는 항상 적용한다.
   - `holidays-api.txt`(공휴일 API)는 마지막 갱신이 성공했을 때만 적용한다.
   - 갱신에 실패한 주(`state/holiday_sync_failed` 존재)는 평일에 모두 운영한다.
-- 기동 대기는 최대 25분(1500초)이다. Network Volume 1단계 생성은 3회 시도하고 간격은 10분이다. health는 연속 3회 실패하면 장애로 판정하고, 자동 복구는 하루 최대 3회까지 한다.
+- 기동 대기는 최대 15분(900초)이다. Pod 생성은 3회 시도하고 간격은 10분이다. health는 연속 3회 실패하면 장애로 판정하고, 자동 복구는 하루 최대 3회까지 한다.
 - 비밀값(RunPod 키, vLLM 키, HF 토큰, 고객사 키)은 git에 넣지 않는다. 서버에서는 권한 600으로 보관한다.
 - SNS 메일 제목(`--subject`)은 ASCII만 쓴다. 본문은 한국어로 써도 된다.
 - bash 테스트는 **Linux**에서 실행한다(WSL Ubuntu 또는 EC2). `flock`이 필요해서 Windows Git Bash에서는 동작하지 않는다. 필요한 도구: `bash`, `jq`(1.6 이상), `flock`, `awk`
@@ -70,8 +71,7 @@ voc-llm-infra/
 │   ├── aws-provision.sh                        # IAM, SG, EC2, EIP, SNS(서울)
 │   └── aws-monitoring.sh                       # CloudWatch 알람, Route 53 HC, EventBridge, SNS(us-east-1)
 ├── runpod/
-│   ├── models.txt                              # 후보 모델 HF repo 4개 (Task 7에서 확정)
-│   └── seed-models.sh                          # Network Volume에 모델 사전 다운로드
+│   └── models.txt                              # 후보 모델 HF repo 4개 (Task 7에서 확정)
 └── eval/
     ├── run_eval.py                             # 모델별 샘플 실행, 지연과 속도 측정, 블라인드 CSV 생성
     └── test_run_eval.py
@@ -104,7 +104,7 @@ voc-llm-infra/
   - `upstream_on HOST`, `upstream_off`
   - `rp METHOD PATH [JSON]`: 본문은 stdout, 반환값 0=2xx, 4=404, 1=그 외
   - `vllm_status HOST`: HTTP 코드를 stdout으로 출력 (네트워크 오류는 `000`)
-  - `pod_spec STAGE`: STAGE는 1(볼륨 사용) 또는 2(볼륨 없음). Pod 생성 JSON을 stdout으로 출력
+  - `pod_spec`: Pod 생성 JSON(볼륨 없음)을 stdout으로 출력
   - `pod_id_of JSON`: id를 출력. 없으면 0이 아닌 값을 반환
 - Produces (tests/helper.sh): `setup`, `run_tests`, `fail`, `assert_eq`, `assert_file_has`, `assert_no_file`, `events`, `calls_count`, 변수 `ROOT`, `BIN`, `T`
 
@@ -131,12 +131,13 @@ __pycache__/
 `ec2/gpu-priority.txt`:
 ```text
 # RunPod gpuTypeId, 위에서부터 우선 (비용 순). '#' 줄과 빈 줄은 무시된다.
-# RTX PRO 6000 MIG 48GB 의 ID는 Task 7에서 확인한 뒤 맨 아래에 추가한다.
-NVIDIA RTX A6000
+# PRO 6000 MIG 48GB 는 REST API gpuTypeIds enum 에 없어 제외 (2026-11-13)
 NVIDIA A40
+NVIDIA RTX A6000
 NVIDIA L40
-NVIDIA RTX 6000 Ada Generation
+NVIDIA RTX PRO 5000 Blackwell
 NVIDIA L40S
+NVIDIA RTX 6000 Ada Generation
 ```
 
 `ec2/holidays.txt`:
@@ -153,7 +154,6 @@ CERT_EMAIL=admin@example.com
 RUNPOD_API_KEY=
 VLLM_API_KEY=
 HF_TOKEN=
-NETWORK_VOLUME_ID=
 VLLM_IMAGE=vllm/vllm-openai:v0.0.0
 MODEL_ID=google/gemma-4-31B-it-qat-w4a16-ct
 MAX_MODEL_LEN=32768
@@ -187,7 +187,6 @@ setup() {
 RUNPOD_API_KEY=test-runpod
 VLLM_API_KEY=test-vllm
 HF_TOKEN=test-hf
-NETWORK_VOLUME_ID=vol-test
 VLLM_IMAGE=vllm/vllm-openai:v9.9.9
 MODEL_ID=org/test-model
 MAX_MODEL_LEN=32768
@@ -231,7 +230,6 @@ rp() {
       local n
       n=$(cat "$T/create_n" 2>/dev/null || echo 0)
       echo $((n + 1)) > "$T/create_n"
-      echo "STAGE $(jq -r 'if has("networkVolumeId") then 1 else 2 end' <<<"$3")" >> "$T/calls"
       if [ "$n" -lt "${FAKE_CREATE_FAILS:-0}" ]; then echo '{"error":"no instances available"}'; return 1; fi
       echo "{\"id\":\"pod$((n + 1))\",\"costPerHr\":0.59,\"machine\":{\"gpuTypeId\":\"NVIDIA RTX A6000\",\"dataCenterId\":\"EU-RO-1\"}}"
       ;;
@@ -274,12 +272,12 @@ exit "$rc"
 . "$(dirname "$0")/helper.sh"
 lib() { ( . "$BIN/lib.sh"; "$@" ); }
 
-t_pod_spec_stage1() {
-  local j; j=$(lib pod_spec 1)
+t_pod_spec() {
+  local j; j=$(lib pod_spec)
   assert_eq "$(jq -r .cloudType <<<"$j")" SECURE "cloudType"
-  assert_eq "$(jq -r .networkVolumeId <<<"$j")" vol-test "networkVolumeId"
-  assert_eq "$(jq -r .volumeMountPath <<<"$j")" /workspace "volumeMountPath"
-  assert_eq "$(jq -r .env.HF_HOME <<<"$j")" /workspace/hf "HF_HOME"
+  assert_eq "$(jq -r 'has("networkVolumeId")' <<<"$j")" false "no volume"
+  assert_eq "$(jq -r 'has("volumeMountPath")' <<<"$j")" false "no mount"
+  assert_eq "$(jq -r .env.HF_HOME <<<"$j")" /root/.cache/huggingface "HF_HOME"
   assert_eq "$(jq -r .env.VLLM_API_KEY <<<"$j")" test-vllm "VLLM_API_KEY"
   assert_eq "$(jq -r '.gpuTypeIds|join(",")' <<<"$j")" "NVIDIA RTX A6000,NVIDIA A40,NVIDIA L40" "gpu order, comments/blank ignored"
   assert_eq "$(jq -r .gpuTypePriority <<<"$j")" custom "gpuTypePriority"
@@ -289,15 +287,8 @@ t_pod_spec_stage1() {
     "--model org/test-model --served-model-name voc-llm --host 0.0.0.0 --port 8000 --max-model-len 32768 --gpu-memory-utilization 0.90 --kv-cache-dtype auto" "dockerStartCmd"
 }
 
-t_pod_spec_stage2() {
-  local j; j=$(lib pod_spec 2)
-  assert_eq "$(jq -r 'has("networkVolumeId")' <<<"$j")" false "no volume in stage 2"
-  assert_eq "$(jq -r 'has("volumeMountPath")' <<<"$j")" false "no mount in stage 2"
-  assert_eq "$(jq -r .env.HF_HOME <<<"$j")" /root/.cache/huggingface "HF_HOME stage 2"
-}
-
 t_pod_spec_extra_args() {
-  local j; j=$(VLLM_EXTRA_ARGS='--limit-mm-per-prompt {"image":0}' lib pod_spec 1)
+  local j; j=$(VLLM_EXTRA_ARGS='--limit-mm-per-prompt {"image":0}' lib pod_spec)
   assert_eq "$(jq -r '.dockerStartCmd[-2:]|join(" ")' <<<"$j")" '--limit-mm-per-prompt {"image":0}' "extra args appended"
 }
 
@@ -327,11 +318,11 @@ t_holiday() {
   true
 }
 
-t_repo_gpu_priority_first_is_a6000() {
-  assert_eq "$(grep -v '^#' "$ROOT/ec2/gpu-priority.txt" | grep -v '^$' | head -1)" "NVIDIA RTX A6000" "repo gpu-priority first line"
+t_repo_gpu_priority_first_is_a40() {
+  assert_eq "$(grep -v '^#' "$ROOT/ec2/gpu-priority.txt" | grep -v '^$' | head -1)" "NVIDIA A40" "repo gpu-priority first line"
 }
 
-run_tests t_pod_spec_stage1 t_pod_spec_stage2 t_pod_spec_extra_args t_upstream_on_off t_log_event t_holiday t_repo_gpu_priority_first_is_a6000
+run_tests t_pod_spec t_pod_spec_extra_args t_upstream_on_off t_log_event t_holiday t_repo_gpu_priority_first_is_a40
 ```
 
 - [ ] **Step 4: 테스트 실패 확인**
@@ -354,7 +345,7 @@ LOCK_FILE="${LOCK_FILE:-/var/lock/voc-llm.lock}"
 UPSTREAM_CONF="${UPSTREAM_CONF:-/etc/nginx/voc-llm/upstream.conf}"
 RUNPOD_API="${RUNPOD_API:-https://rest.runpod.io/v1}"
 READY_POLL_SEC="${READY_POLL_SEC:-15}"
-READY_TIMEOUT_SEC="${READY_TIMEOUT_SEC:-1500}"
+READY_TIMEOUT_SEC="${READY_TIMEOUT_SEC:-900}"
 CREATE_RETRIES="${CREATE_RETRIES:-3}"
 CREATE_RETRY_SEC="${CREATE_RETRY_SEC:-600}"
 HEALTH_FAIL_LIMIT="${HEALTH_FAIL_LIMIT:-3}"
@@ -428,10 +419,10 @@ vllm_status() {
 
 pod_id_of() { jq -er '.id // empty' <<<"$1" 2>/dev/null; }
 
-# pod_spec STAGE : 1 = Network Volume 사용, 2 = 볼륨 없음(HF 에서 다운로드)
+# pod_spec : 볼륨 없음. 기동 시 HF 에서 모델을 컨테이너 디스크로 다운로드
 pod_spec() {
-  jq -n --arg stage "$1" --rawfile gpus "$VOC_HOME/gpu-priority.txt" \
-    --arg image "$VLLM_IMAGE" --arg model "$MODEL_ID" --arg vol "${NETWORK_VOLUME_ID:-}" \
+  jq -n --rawfile gpus "$VOC_HOME/gpu-priority.txt" \
+    --arg image "$VLLM_IMAGE" --arg model "$MODEL_ID" \
     --arg hf "$HF_TOKEN" --arg key "$VLLM_API_KEY" --arg maxlen "${MAX_MODEL_LEN:-32768}" \
     --arg extra "${VLLM_EXTRA_ARGS:-}" '
     {
@@ -446,15 +437,14 @@ pod_spec() {
       env: {
         HF_TOKEN: $hf,
         VLLM_API_KEY: $key,
-        HF_HOME: (if $stage == "1" then "/workspace/hf" else "/root/.cache/huggingface" end)
+        HF_HOME: "/root/.cache/huggingface"
       },
       dockerStartCmd: (["--model", $model, "--served-model-name", "voc-llm",
                         "--host", "0.0.0.0", "--port", "8000",
                         "--max-model-len", $maxlen, "--gpu-memory-utilization", "0.90",
                         "--kv-cache-dtype", "auto"]
                        + ($extra | split(" ") | map(select(length > 0))))
-    }
-    + (if $stage == "1" then {networkVolumeId: $vol, volumeMountPath: "/workspace"} else {} end)'
+    }'
 }
 
 # --- 이 아래에 Task 2~4 함수를 추가한다. 스텁 로딩 줄은 항상 파일 마지막에 둔다. ---
@@ -489,7 +479,7 @@ git commit -m "feat: lib.sh 기본 함수와 bash 테스트 하네스"
 **Interfaces:**
 - Consumes: Task 1의 `rp`, `pod_spec`, `pod_id_of`, `vllm_status`, `upstream_on/off`, `log_event`, `notify`, `sleep_s`, `now_*`
 - Produces:
-  - `create_pod`: 반환값 0이면 성공. 성공하면 `$STATE_DIR/created.json`을 기록하고 전역변수 `CREATE_STAGE`(1|2), `CREATE_FAILS`(정수)를 설정한다
+  - `create_pod`: 반환값 0이면 성공. 성공하면 `$STATE_DIR/created.json`을 기록하고 전역변수 `CREATE_FAILS`(정수)를 설정한다
   - `do_start TRIGGER`: TRIGGER는 `cron`, `manual`, `health` 중 하나. 반환값 0이면 성공
   - 성공하면 `$STATE_DIR/current_pod`를 기록한다. JSON 키: `pod_id`, `gpu`, `datacenter`, `cost_per_hr`(number), `started_at`(iso), `created_epoch`(number), `endpoint`
   - TRIGGER가 `health`가 아니면 당일 `recover_*`, `gave_up_*` 파일을 삭제한다
@@ -510,7 +500,6 @@ t_start_ok() {
   assert_eq "$(last .pod_id)" pod1 "pod_id"
   assert_eq "$(last .gpu)" "NVIDIA RTX A6000" "gpu"
   assert_eq "$(last .datacenter)" EU-RO-1 "datacenter"
-  assert_eq "$(last .stage)" 1 "stage"
   assert_eq "$(last .retries)" 0 "retries"
   assert_eq "$(last .cost_per_hr)" 0.59 "cost"
   assert_eq "$(last .model)" org/test-model "model"
@@ -520,21 +509,18 @@ t_start_ok() {
   assert_eq "$(jq -r '.created_epoch|type' "$VOC_HOME/state/current_pod")" number "created_epoch type"
 }
 
-t_start_fallback_to_stage2() {
-  FAKE_CREATE_FAILS=3 start || fail "should succeed in stage 2"
+t_start_retry_then_ok() {
+  FAKE_CREATE_FAILS=2 start || fail "should succeed on 3rd attempt"
   assert_eq "$(last .result)" ok "result"
-  assert_eq "$(last .stage)" 2 "stage"
-  assert_eq "$(last .retries)" 3 "retries"
-  assert_eq "$(last .pod_id)" pod4 "pod_id"
-  assert_eq "$(calls_count 'STAGE 1')" 3 "stage1 attempts"
-  assert_eq "$(calls_count 'STAGE 2')" 1 "stage2 attempts"
-  assert_eq "$(calls_count 'SLEEP 600')" 2 "retry waits between stage1 attempts"
+  assert_eq "$(last .retries)" 2 "retries"
+  assert_eq "$(last .pod_id)" pod3 "pod_id"
+  assert_eq "$(calls_count 'SLEEP 600')" 2 "retry waits"
 }
 
 t_start_no_gpu() {
   FAKE_CREATE_FAILS=99 start && fail "should fail"
   assert_eq "$(events)" "START:failed_no_gpu" "events"
-  assert_eq "$(last .retries)" 4 "attempts"
+  assert_eq "$(last .retries)" 3 "attempts"
   assert_eq "$(calls_count 'NOTIFY START failed: no GPU')" 1 "notify"
   assert_file_has "$UPSTREAM_CONF" "return 503"
   assert_no_file "$VOC_HOME/state/current_pod"
@@ -578,7 +564,7 @@ t_start_resets_recover_counters() {
   assert_no_file "$VOC_HOME/state/gave_up_20261116"
 }
 
-run_tests t_start_ok t_start_fallback_to_stage2 t_start_no_gpu t_start_not_ready_deletes_pod \
+run_tests t_start_ok t_start_retry_then_ok t_start_no_gpu t_start_not_ready_deletes_pod \
   t_start_skips_holiday t_start_force_on_holiday t_start_already_running t_start_resets_recover_counters
 ```
 
@@ -591,27 +577,18 @@ Expected: 모두 `FAIL`. `pod-start.sh: No such file or directory` 오류가 난
 
 `ec2/bin/lib.sh`의 `# --- 이 아래에 Task 2~4 함수를 추가한다 ...` 줄 바로 아래에 추가한다(스텁 로딩 `if` 블록보다 위):
 ```bash
-# create_pod : 1단계(볼륨 DC) CREATE_RETRIES 회 → 실패 시 2단계(볼륨 없음) 1회
+# create_pod : CREATE_RETRIES 회 시도, 사이에 CREATE_RETRY_SEC 대기
 create_pod() {
   local i out
   CREATE_FAILS=0
-  if [ -n "${NETWORK_VOLUME_ID:-}" ]; then
-    for ((i = 0; i < CREATE_RETRIES; i++)); do
-      if [ "$i" -gt 0 ]; then sleep_s "$CREATE_RETRY_SEC"; fi
-      if out=$(rp POST /pods "$(pod_spec 1)") && pod_id_of "$out" >/dev/null; then
-        CREATE_STAGE=1
-        printf '%s' "$out" > "$STATE_DIR/created.json"
-        return 0
-      fi
-      CREATE_FAILS=$((CREATE_FAILS + 1))
-    done
-  fi
-  if out=$(rp POST /pods "$(pod_spec 2)") && pod_id_of "$out" >/dev/null; then
-    CREATE_STAGE=2
-    printf '%s' "$out" > "$STATE_DIR/created.json"
-    return 0
-  fi
-  CREATE_FAILS=$((CREATE_FAILS + 1))
+  for ((i = 0; i < CREATE_RETRIES; i++)); do
+    if [ "$i" -gt 0 ]; then sleep_s "$CREATE_RETRY_SEC"; fi
+    if out=$(rp POST /pods "$(pod_spec)") && pod_id_of "$out" >/dev/null; then
+      printf '%s' "$out" > "$STATE_DIR/created.json"
+      return 0
+    fi
+    CREATE_FAILS=$((CREATE_FAILS + 1))
+  done
   return 1
 }
 
@@ -625,7 +602,7 @@ do_start() {
   if ! create_pod; then
     upstream_off || true
     log_event START failed_no_gpu --arg trigger "$trigger" --arg requested_at "$requested_at" --argjson retries "$CREATE_FAILS"
-    notify "START failed: no GPU" "Secure 48GB GPU를 확보하지 못했습니다(1·2단계 모두 실패, 시도 ${CREATE_FAILS}회)."
+    notify "START failed: no GPU" "Secure 48GB GPU를 확보하지 못했습니다(시도 ${CREATE_FAILS}회 모두 실패)."
     return 1
   fi
   created_at=$(now_iso)
@@ -671,7 +648,7 @@ do_start() {
   echo 0 > "$STATE_DIR/health_fail"
   log_event START ok --arg trigger "$trigger" --arg requested_at "$requested_at" --arg ready_at "$(now_iso)" \
     --argjson ready_sec "$(($(now_epoch) - t0))" --arg pod_id "$id" --arg gpu "$gpu" --arg datacenter "$dc" \
-    --argjson stage "$CREATE_STAGE" --argjson retries "$CREATE_FAILS" --argjson cost_per_hr "$cost" \
+    --argjson retries "$CREATE_FAILS" --argjson cost_per_hr "$cost" \
     --arg model "$MODEL_ID" --arg endpoint "https://$host"
 }
 ```
@@ -1750,14 +1727,14 @@ git commit -m "feat: AWS 프로비저닝 스크립트 (IAM, SG, EC2, EIP, SNS)"
 
 ---
 
-### Task 7: RunPod 구성 (키, 데이터센터, Network Volume, GPU ID, 이미지, 모델)
+### Task 7: RunPod 구성 (키, GPU ID, 이미지, 모델)
 
 **Files:**
-- Create: `runpod/models.txt`, `runpod/seed-models.sh`
-- Modify: `ec2/gpu-priority.txt` (PRO 6000 MIG ID 추가), `runpod-설계.md` 7장 표 기록
+- Create: `runpod/models.txt`
+- Modify: `runpod-설계.md` 7장 표 기록
 
 **Interfaces:**
-- Produces: EC2 `.env`의 `RUNPOD_API_KEY`, `HF_TOKEN`, `NETWORK_VOLUME_ID`, `VLLM_IMAGE`, `MODEL_ID`
+- Produces: EC2 `.env`의 `RUNPOD_API_KEY`, `HF_TOKEN`, `VLLM_IMAGE`, `MODEL_ID`
 
 - [ ] **Step 1: 키 발급**
 
@@ -1765,7 +1742,7 @@ git commit -m "feat: AWS 프로비저닝 스크립트 (IAM, SG, EC2, EIP, SNS)"
 - Billing에서 자동 충전을 켜고 잔액 알림을 설정한다.
 - Hugging Face → Settings → Access Tokens에서 Read 토큰을 발급한다. `google/gemma-4-31B-it` 모델 페이지에서 라이선스 동의를 한 뒤 EC2 `.env`의 `HF_TOKEN`에 넣는다.
 
-- [ ] **Step 2: 48GB Secure GPU ID 확인 → gpu-priority.txt 완성**
+- [x] **Step 2: 48GB Secure GPU ID 확인 → gpu-priority.txt 완성**
 
 EC2에서 실행:
 ```bash
@@ -1774,29 +1751,22 @@ curl -s https://api.runpod.io/graphql -H "Authorization: Bearer $RUNPOD_API_KEY"
   -d '{"query":"query { gpuTypes { id displayName memoryInGb secureCloud } }"}' \
   | jq -r '.data.gpuTypes[] | select(.secureCloud and .memoryInGb >= 48 and .memoryInGb < 80) | "\(.id)\t\(.memoryInGb)GB\t\(.displayName)"'
 ```
-Expected: 목록에 `NVIDIA RTX A6000`, `NVIDIA A40`, `NVIDIA L40`, `NVIDIA RTX 6000 Ada Generation`, `NVIDIA L40S`가 있다.
+Expected: 목록에 `NVIDIA A40`, `NVIDIA RTX A6000`, `NVIDIA L40`, `NVIDIA RTX PRO 5000 Blackwell`, `NVIDIA L40S`, `NVIDIA RTX 6000 Ada Generation`이 있다.
 
-- 기존 5줄의 ID와 일치하지 않는 것이 있으면 출력된 `id`로 고친다.
-- PRO 6000 MIG 48GB 항목이 있으면 그 `id`를 `ec2/gpu-priority.txt` 맨 아래에 추가한다.
-- 목록에 없으면 추가하지 않고, `runpod-설계.md` 7장에 "MIG 48GB: API 목록에 없음(날짜)"이라고 기록한다.
+- 기존 6줄의 ID와 일치하지 않는 것이 있으면 출력된 `id`로 고친다.
+- 결과(2026-11-13): PRO 6000 MIG 48GB는 REST API `gpuTypeIds` enum에 없어 제외했다. `ec2/gpu-priority.txt`는 위 6종 순서로 확정했다.
 
-- [ ] **Step 3: 데이터센터 선택과 Network Volume 생성**
-
-1. RunPod 콘솔 → Storage → New Network Volume 화면에서 데이터센터별 GPU 목록을 본다. `NVIDIA RTX A6000`과 `NVIDIA A40`이 둘 다 있는 곳을 고르고, 그중 L40, RTX 6000 Ada, L40S가 가장 많은 곳을 선택한다.
-2. 이름 `voc-llm-models`, 크기 100GB로 생성한다.
-3. 생성된 Volume ID를 EC2 `.env`의 `NETWORK_VOLUME_ID`에 넣는다.
-4. 데이터센터 ID와 제공 GPU 목록을 `runpod-설계.md` 7장 표에 기록한다.
-
-- [ ] **Step 4: vLLM 이미지 태그 고정**
+- [x] **Step 3: vLLM 이미지 태그 고정**
 
 ```bash
 curl -s 'https://hub.docker.com/v2/repositories/vllm/vllm-openai/tags?page_size=50&ordering=last_updated' \
   | jq -r '.results[].name' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -3
 ```
 - 출력된 것 중 가장 높은 버전을 EC2 `.env`의 `VLLM_IMAGE=vllm/vllm-openai:<버전>`에 넣고 7장 표에 기록한다.
-- 해당 버전의 릴리스 노트에서 CUDA 12.8 이상 빌드인지 확인한다. CUDA 12.8 미만이면 PRO 6000(Blackwell)에서 동작하지 않으므로 MIG 줄을 gpu-priority.txt에서 뺀다.
+- 해당 버전의 릴리스 노트에서 CUDA 12.8 이상 빌드인지 확인한다. CUDA 12.8 미만이면 Blackwell GPU(RTX PRO 5000)에서 동작하지 않으므로 해당 줄을 gpu-priority.txt에서 뺀다.
+- 결과(2026-11-13): `vllm/vllm-openai:v0.33.0`으로 확정했다.
 
-- [ ] **Step 5: 후보 모델 repo 확정 → runpod/models.txt**
+- [x] **Step 4: 후보 모델 repo 확정 → runpod/models.txt**
 
 ```bash
 for r in google/gemma-4-26B-A4B-it-qat-w4a16-ct google/gemma-4-31B-it-qat-w4a16-ct; do
@@ -1811,50 +1781,18 @@ done
 - Gemma 공식 repo가 `200`이면 그 repo를 쓴다.
 - 그 외에는 다운로드 수가 가장 많은 repo를 고른다. 단 작성자가 `Qwen`, `RedHatAI`, `cyankiwi`, `QuantTrio` 같은 검증된 양자화 작성자여야 하고, 모델 카드에 vLLM 실행 예시가 있어야 한다.
 
-`runpod/models.txt` (확정한 4개 repo, 한 줄에 하나. 예시는 Gemma 2개 확정본):
+`runpod/models.txt` (확정한 4개 repo, 한 줄에 하나):
 ```text
 google/gemma-4-31B-it-qat-w4a16-ct
-google/gemma-4-26B-A4B-it-qat-w4a16-ct
+cyankiwi/gemma-4-26B-A4B-it-qat-AWQ-INT4
+QuantTrio/Qwen3.6-35B-A3B-AWQ
+cyankiwi/Qwen3.8-27B-AWQ-INT4
 ```
-→ 위 검색 결과로 고른 Qwen3.6-35B-A3B AWQ repo와 Qwen3.8-27B AWQ repo를 2줄 추가한다. 4개 repo를 `runpod-설계.md` 5장, 7장 표에 기록한다.
+결과(2026-11-13): gemma-4-26B 공식 qat-w4a16-ct repo는 공개되어 있지 않아 31B와 같은 QAT 기반의 커뮤니티 AWQ를 쓴다. 4개 repo를 `runpod-설계.md` 5장, 7장 표에 기록했다.
 
-- [ ] **Step 6: 모델 사전 다운로드 스크립트**
+- [ ] **Step 5: 최초 모델 지정, 부팅 시간 실측 기록, 커밋**
 
-`runpod/seed-models.sh`:
-```bash
-#!/usr/bin/env bash
-# EC2 에서 실행: bash runpod/seed-models.sh  → Network Volume 에 models.txt 의 모델을 받는 임시 Pod 생성
-set -euo pipefail
-set -a; . /opt/voc-llm/.env; set +a
-MODELS=$(grep -v '^#' "$(dirname "$0")/models.txt" | grep -v '^$' | paste -sd' ' -)
-GPUS=$(grep -v '^#' /opt/voc-llm/gpu-priority.txt | grep -v '^$' | jq -R . | jq -s .)
-SPEC=$(jq -n --argjson gpus "$GPUS" --arg vol "$NETWORK_VOLUME_ID" --arg hf "$HF_TOKEN" --arg models "$MODELS" '{
-  name: "voc-llm-seed", cloudType: "SECURE", gpuCount: 1,
-  gpuTypeIds: $gpus, gpuTypePriority: "custom",
-  imageName: "python:3.12-slim", containerDiskInGb: 20,
-  networkVolumeId: $vol, volumeMountPath: "/workspace",
-  env: { HF_TOKEN: $hf, HF_HOME: "/workspace/hf", MODELS: $models },
-  dockerEntrypoint: ["bash", "-c"],
-  dockerStartCmd: ["pip install -q -U huggingface_hub && for m in $MODELS; do hf download $m || echo SEED_FAIL $m; done; du -sh /workspace/hf/hub/*; echo SEED_DONE; sleep infinity"]
-}')
-curl -sS -X POST https://rest.runpod.io/v1/pods -H "Authorization: Bearer $RUNPOD_API_KEY" \
-  -H 'Content-Type: application/json' -d "$SPEC" | jq '{id, costPerHr, machine}'
-```
-
-Run: `scp -r runpod ubuntu@<EIP>:~/ && ssh ubuntu@<EIP> 'bash ~/runpod/seed-models.sh'`
-
-Expected:
-- Pod `id`가 출력된다.
-- RunPod 콘솔 → 해당 Pod → Logs에서 `SEED_DONE`이 나오고 `SEED_FAIL` 줄은 없어야 한다.
-- 모델 4개의 크기 합계가 약 60~90GB로 보인다.
-
-확인이 끝나면 seed Pod를 삭제한다:
-```bash
-curl -sS -X DELETE https://rest.runpod.io/v1/pods/<seed-pod-id> -H "Authorization: Bearer $RUNPOD_API_KEY" -w '%{http_code}\n'
-```
-Expected: `200` 또는 `204`
-
-- [ ] **Step 7: 최초 모델 지정과 커밋**
+실측(2026-11-13, A40, `google/gemma-4-31B-it-qat-w4a16-ct`): Pod RUNNING 약 5초, `/v1/models` 200까지 3분 21초~3분 48초, 첫 completion 4~5초. `runpod-설계.md` 2장에 기록했다.
 
 EC2 `.env`에 `MODEL_ID=google/gemma-4-31B-it-qat-w4a16-ct`를 넣는다. Task 10에서 최종 선정한 모델로 바꾼다.
 Qwen3.8-27B를 쓰는 경우에는 `VLLM_EXTRA_ARGS='--limit-mm-per-prompt {"image":0}'`도 넣는다.
@@ -1863,7 +1801,7 @@ Qwen3.8-27B를 쓰는 경우에는 `VLLM_EXTRA_ARGS='--limit-mm-per-prompt {"ima
 
 ```bash
 git add ec2/gpu-priority.txt runpod runpod-설계.md
-git commit -m "feat: RunPod GPU ID, Network Volume, 모델 사전 다운로드"
+git commit -m "feat: RunPod GPU ID, 이미지 태그, 후보 모델 확정"
 ```
 
 ---
@@ -1907,8 +1845,7 @@ Expected:
 - `"result": "ok"`
 - `gpu`와 `datacenter`가 `unknown`이 아니다.
 - `cost_per_hr`가 0보다 크다.
-- `stage` 1
-- `ready_sec`가 1500 미만이다.
+- `ready_sec`가 900 미만이다(실측 약 200~230초).
 
 `gpu`, `datacenter`, `cost_per_hr` 중 하나라도 `unknown` 또는 0이면 실제 응답 구조를 확인한다:
 ```bash
@@ -1953,25 +1890,22 @@ Expected:
 - [ ] **Step 4: GPU fallback (항목 2)**
 
 ```bash
-sudo sed -i '0,/^NVIDIA RTX A6000$/s//NVIDIA NOT-A-GPU/' /opt/voc-llm/gpu-priority.txt
-sudo /opt/voc-llm/bin/pod-start.sh --force && tail -n1 /var/log/voc-llm/pod.log | jq '{result, gpu, stage}'
+sudo sed -i '0,/^NVIDIA A40$/s//NVIDIA NOT-A-GPU/' /opt/voc-llm/gpu-priority.txt
+sudo /opt/voc-llm/bin/pod-start.sh --force && tail -n1 /var/log/voc-llm/pod.log | jq '{result, gpu}'
 sudo /opt/voc-llm/bin/pod-stop.sh --force
 sudo install -m 644 ~/ec2/gpu-priority.txt /opt/voc-llm/
 ```
-Expected: `result` ok, `gpu`는 `NVIDIA RTX A6000`이 아닌 다음 순위 GPU다. 다음 순위도 품절이면 그다음 순위가 나온다.
+Expected: `result` ok, `gpu`는 `NVIDIA A40`이 아닌 다음 순위 GPU다. 다음 순위도 품절이면 그다음 순위가 나온다.
 
 RunPod가 존재하지 않는 ID 때문에 요청 전체를 거부하면(`failed_no_gpu`), "custom 우선순위 목록에 없는 ID는 오류"라는 뜻이다. 그 경우에는 첫 줄을 그냥 삭제해서 같은 테스트를 하고, 결과를 `runpod-설계.md` 7장에 기록한다.
 
-- [ ] **Step 5: 볼륨 없는 2단계 (항목 3)**
+- [ ] **Step 5: 생성 재시도 (항목 3)**
 
 ```bash
-sudo cp /opt/voc-llm/.env /tmp/env.bak
-sudo sed -i 's/^NETWORK_VOLUME_ID=.*/NETWORK_VOLUME_ID=invalid-volume-id/' /opt/voc-llm/.env
-sudo CREATE_RETRIES=1 /opt/voc-llm/bin/pod-start.sh --force && tail -n1 /var/log/voc-llm/pod.log | jq '{result, stage, retries, ready_sec}'
+sudo CREATE_RETRIES=1 /opt/voc-llm/bin/pod-start.sh --force && tail -n1 /var/log/voc-llm/pod.log | jq '{result, retries, ready_sec}'
 sudo /opt/voc-llm/bin/pod-stop.sh --force
-sudo cp /tmp/env.bak /opt/voc-llm/.env && sudo rm /tmp/env.bak
 ```
-Expected: `result` ok, `stage` 2, `retries` 1이다. `ready_sec`는 1단계보다 길다(HF 다운로드 시간). 이 값을 `runpod-설계.md` 7장에 기록한다.
+Expected: `result` ok, `retries` 0이다. `ready_sec`가 900 미만(실측 약 4분)인지 확인하고 `runpod-설계.md` 2장에 기록한다.
 
 - [ ] **Step 6: 업무시간 감시와 복구 (항목 12~15, 평일 업무시간)**
 
@@ -1988,7 +1922,7 @@ sudo /opt/voc-llm/bin/pod-start.sh --force
     ```bash
     sudo sed -i 's#^MODEL_ID=.*#MODEL_ID=org/does-not-exist#' /opt/voc-llm/.env
     ```
-    이후 Pod를 Terminate한다. 복구 3회(각 최대 25분)가 끝나면 `HEALTH:gave_up`과 메일 "RunPod recovery gave up"이 오고, 이후 Pod가 생성되지 않는다.
+    이후 Pod를 Terminate한다. 복구 3회(각 최대 15분)가 끝나면 `HEALTH:gave_up`과 메일 "RunPod recovery gave up"이 오고, 이후 Pod가 생성되지 않는다.
     오래 걸리므로 이 항목만 `sudo READY_TIMEOUT_SEC=120 /opt/voc-llm/bin/pod-health.sh`로 수동 실행해서 단축해도 된다.
     끝나면 `MODEL_ID`를 원래대로 돌리고 `sudo /opt/voc-llm/bin/pod-start.sh --force`를 실행한다.
 15. 점검 모드 확인:
@@ -2328,11 +2262,11 @@ git commit -m "feat: 모델 평가 스크립트 (TTFT, 속도, 블라인드 CSV)
 # EC2
 sudo sed -i "s#^MODEL_ID=.*#MODEL_ID=<repo>#" /opt/voc-llm/.env
 sudo /opt/voc-llm/bin/pod-stop.sh --force; sudo /opt/voc-llm/bin/pod-start.sh --force
-tail -n1 /var/log/voc-llm/pod.log | jq '{gpu, ready_sec}'     # GPU 가 RTX A6000 인지, 기동 시간 기록
+tail -n1 /var/log/voc-llm/pod.log | jq '{gpu, ready_sec}'     # GPU 가 A40 인지, 기동 시간 기록
 # 관리자 PC
 py -3.12 eval/run_eval.py run --label <label> --base https://<DOMAIN> --key <고객사키>
 ```
-- 기동 GPU가 A6000이 아니면 그 회차는 비교에서 빼고 다시 실행한다. 속도 비교가 공정하려면 GPU가 같아야 한다.
+- 기동 GPU가 A40이 아니면 그 회차는 비교에서 빼고 다시 실행한다. 속도 비교가 공정하려면 GPU가 같아야 한다.
 - Qwen3.8-27B 회차에서만 `.env`에 `VLLM_EXTRA_ARGS='--limit-mm-per-prompt {"image":0}'`를 두고, 다른 모델 회차에서는 비운다.
 
 4개가 끝나면:
@@ -2360,7 +2294,7 @@ git commit -m "docs: 모델 선정 결과 기록"
 |---|---|
 | OpenAI 호환 API, 고객사 키, 내부 키 분리, SSE, 503 응답 (aws 3장) | 5, 6, 8 |
 | cron 08:30 / 18:00 / 2분 health, 공휴일, 잠금 (aws 4장) | 2, 3, 4, 5 |
-| pod-start 로직, 1·2단계, 재시도 3회, 25분 대기 (aws 5장) | 2, 8 |
+| pod-start 로직, 재시도 3회, 15분 대기 (aws 5장) | 2, 8 |
 | pod-stop 로직, 삭제 재시도, 추정 비용 (aws 6장) | 3, 8 |
 | 업무시간 감시, 점검 A/B, 복구 3회, gave_up, 점검 모드 (aws 6-1장) | 4, 8 |
 | 공휴일 API 주간 갱신, 수동 휴무일, 갱신 실패 주는 평일 전부 운영 (aws 6-2장) | 4-1, 5(cron, install), 8(Step 0) |
@@ -2368,8 +2302,8 @@ git commit -m "docs: 모델 선정 결과 기록"
 | 수동 운영 절차 (aws 8장) | 2(`--force`), 3(`--force`), 4(maintenance) |
 | CloudWatch 자원, Route 53, 상태 점검, EventBridge, 대시보드, 스왑, 로그 크기 제한 (aws 9장) | 5, 9 |
 | 검증 1~15 (aws 10장) | 8(1~6, 12~15), 9(7~11) |
-| Secure 전용, GPU 우선순위, MIG ID, CUDA 12.8 이상, 이미지 고정 (runpod 1, 3장) | 1, 7 |
-| Network Volume 100GB, 데이터센터 선택, 사전 다운로드 (runpod 2장) | 7 |
+| Secure 전용, GPU 우선순위, MIG 제외, CUDA 12.8 이상, 이미지 고정 (runpod 1, 3장) | 1, 7 |
+| 모델 로딩(볼륨 없음, 기동 시 HF 다운로드), 부팅 시간 실측 (runpod 2장) | 7, 8 |
 | Pod 생성 사양, served-model-name, kv-cache auto, VLM 옵션 (runpod 4장) | 1, 7 |
 | 모델 후보와 선정 방법 (runpod 5장) | 7, 10 |
-| 보안: 포트 8000만 노출, 요청 본문 로그 없음, 볼륨에 VOC 데이터 없음 (runpod 6장) | 1(`ports`), 10(samples는 로컬에만 두고 gitignore) |
+| 보안: 포트 8000만 노출, 요청 본문 로그 없음 (runpod 6장) | 1(`ports`), 10(samples는 로컬에만 두고 gitignore) |

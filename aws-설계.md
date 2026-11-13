@@ -26,7 +26,7 @@
 
 ```
 /opt/voc-llm/
-├── .env                  # RUNPOD_API_KEY, VLLM_API_KEY, HF_TOKEN, NETWORK_VOLUME_ID, MODEL_ID (권한 600)
+├── .env                  # RUNPOD_API_KEY, VLLM_API_KEY, HF_TOKEN, MODEL_ID (권한 600)
 ├── gpu-priority.txt      # GPU 우선순위, 한 줄에 하나
 ├── holidays.txt          # 수동 휴무일(회사 자체 휴무 등) YYYY-MM-DD, 한 줄에 하나. 항상 적용
 ├── holidays-api.txt      # 공휴일 API 에서 받은 법정공휴일 (holiday-sync.sh 가 덮어씀, 6-2절)
@@ -135,23 +135,21 @@ RunPod HTTP proxy는 앞단 Cloudflare 때문에 **약 100초** 동안 응답이
 ```
 1. 오늘이 공휴일이면 START 로그(result=skipped_holiday)를 남기고 종료
 2. state/current_pod 가 있으면 그 Pod 의 vLLM 을 확인한다. 준비됐으면 upstream ON 으로 다시 맞추고 START 로그(result=already_running) 후 종료. 준비 안 됐으면 삭제(do_stop) 후 새로 기동
-3. [1단계] Network Volume 데이터센터에서 생성
+3. Secure 데이터센터 어디서나 생성 (볼륨 없음, 모델은 기동 시 HF에서 다운로드)
    POST https://rest.runpod.io/v1/pods
      cloudType=SECURE, gpuTypeIds=gpu-priority.txt 순서, gpuTypePriority=custom,
-     networkVolumeId=$NETWORK_VOLUME_ID, (runpod-설계.md 4장 사양)
+     (runpod-설계.md 4장 사양)
    - 실패(자원 없음)면 10분 간격으로 최대 3회 재시도 (08:30 / 08:40 / 08:50)
-4. [2단계] 1단계가 모두 실패하면 볼륨 없이 아무 Secure 데이터센터에서 생성
-   - 같은 사양에서 networkVolumeId만 제외. 모델은 HF에서 새로 받으므로 기동이 수 분 더 걸린다
-5. 생성에 성공하면 GET /v1/pods/{id} 로 할당된 GPU, 데이터센터, costPerHr 조회
-6. https://{id}-8000.proxy.runpod.net/v1/models 를 Authorization: Bearer $VLLM_API_KEY 로 호출해서
-   200 을 줄 때까지 15초 간격으로 대기 (최대 25분)
-7. 200 이면 upstream.conf ON 으로 교체 → reload → state/current_pod 기록 → START 로그(result=ok)
-8. 6단계 타임아웃이면 Pod 삭제 → upstream OFF 유지 → START 로그(result=failed_not_ready)
-9. 3·4단계 모두 실패하면 START 로그(result=failed_no_gpu)
+4. 생성에 성공하면 GET /v1/pods/{id} 로 할당된 GPU, 데이터센터, costPerHr 조회
+5. https://{id}-8000.proxy.runpod.net/v1/models 를 Authorization: Bearer $VLLM_API_KEY 로 호출해서
+   200 을 줄 때까지 15초 간격으로 대기 (최대 15분)
+6. 200 이면 upstream.conf ON 으로 교체 → reload → state/current_pod 기록 → START 로그(result=ok)
+7. 5단계 타임아웃이면 Pod 삭제 → upstream OFF 유지 → START 로그(result=failed_not_ready)
+8. 3단계 재시도가 모두 실패하면 START 로그(result=failed_no_gpu)
 ```
 
 - `gpuTypePriority=custom`이면 RunPod가 목록 순서대로 자원을 찾는다. 따라서 호출 1번에 GPU fallback이 처리된다.
-- REST API의 필드명과 GPU ID 문자열은 구축할 때 `GET /v1/gputypes`와 API 문서로 확인한 뒤 `gpu-priority.txt`에 기록한다. 특히 PRO 6000 MIG 48GB의 ID를 확인해야 한다.
+- REST API의 필드명과 GPU ID 문자열은 구축할 때 `GET /v1/gputypes`와 API 문서로 확인한 뒤 `gpu-priority.txt`에 기록한다. PRO 6000 MIG 48GB는 `gpuTypeIds` enum에 없어 제외했다.
 
 ## 6. pod-stop.sh 로직
 
@@ -195,7 +193,7 @@ RunPod HTTP proxy는 앞단 Cloudflare 때문에 **약 100초** 동안 응답이
    a. upstream.conf OFF → reload   (복구 중에는 고객사에 503 응답)
    b. pod-stop.sh 의 삭제 절차 실행 → STOP 로그(result=replaced)
       (장애 Pod도 과금되므로 반드시 먼저 삭제한다)
-   c. pod-start.sh 의 생성 절차 실행 (GPU 우선순위, 1·2단계 fallback 동일) → START 로그
+   c. pod-start.sh 의 생성 절차 실행 (GPU 우선순위, 재시도 동일) → START 로그
    d. recover_YYYYMMDD += 1, health_fail = 0
    e. SNS 알림 "자동 복구 완료: 새 podId, GPU, 소요시간" 또는 "자동 복구 실패"
    - 당일 복구 횟수가 3회에 도달하면 더 이상 Pod를 교체하지 않는다.
@@ -204,7 +202,7 @@ RunPod HTTP proxy는 앞단 Cloudflare 때문에 **약 100초** 동안 응답이
 ```
 
 - 감지 시간: 응답 장애는 최대 약 6분, Pod 강제 종료는 최대 약 2분이다.
-- 복구 시간: Network Volume에 모델이 있으면 수 분, 2단계(HF 다운로드)는 10분 이상 걸릴 수 있다.
+- 복구 시간: 모델을 HF에서 받으므로 기동에 약 4분(실측), HF가 느리면 최대 15분까지 걸릴 수 있다.
 - 17:30 이후에 장애가 나면 복구가 18:00 종료와 겹친다. 이때 pod-stop.sh는 잠금을 기다렸다가 새 Pod를 삭제한다. 30분 미만 사용을 위해 Pod를 다시 만드는 비용은 감수한다.
 - `pod-start.sh`의 실패 결과(`failed_no_gpu`, `failed_not_ready`)도 같은 SNS 토픽으로 알린다. 아침 기동에 실패한 경우 09:00부터 health가 1번 분기로 재시도한다.
 
@@ -254,14 +252,14 @@ START (시작 시):
 ```json
 {"event":"START","ts":"2026-11-16T08:34:52+09:00","result":"ok",
  "requested_at":"2026-11-16T08:30:00+09:00","ready_at":"2026-11-16T08:34:52+09:00","ready_sec":292,
- "pod_id":"abc123xyz","gpu":"NVIDIA RTX A6000","datacenter":"EU-RO-1","stage":1,"retries":0,
+ "pod_id":"abc123xyz","gpu":"NVIDIA A40","datacenter":"EU-SE-1","retries":0,
  "cost_per_hr":0.59,"model":"Qwen/Qwen3.6-35B-A3B-AWQ","endpoint":"https://abc123xyz-8000.proxy.runpod.net"}
 ```
 
 STOP (종료 시):
 ```json
 {"event":"STOP","ts":"2026-11-16T18:00:41+09:00","result":"ok",
- "pod_id":"abc123xyz","gpu":"NVIDIA RTX A6000","started_at":"2026-11-16T08:30:12+09:00",
+ "pod_id":"abc123xyz","gpu":"NVIDIA A40","started_at":"2026-11-16T08:30:12+09:00",
  "uptime_hr":9.51,"cost_per_hr":0.59,"est_cost_usd":5.61}
 ```
 
@@ -270,8 +268,8 @@ STOP (종료 시):
 | `ok` | 정상 |
 | `skipped_holiday` (START) | 공휴일이라 건너뜀 |
 | `already_running` | 이미 기동 중인 Pod가 있음 |
-| `failed_no_gpu` | 1·2단계 모두 GPU 확보 실패 |
-| `failed_not_ready` | Pod는 생성됐지만 25분 안에 vLLM이 준비되지 않음 (Pod 삭제함) |
+| `failed_no_gpu` | 재시도 모두 GPU 확보 실패 |
+| `failed_not_ready` | Pod는 생성됐지만 15분 안에 vLLM이 준비되지 않음 (Pod 삭제함) |
 | `failed_reload` | vLLM은 준비됐지만 nginx reload 실패 (Pod 삭제함) |
 | `failed_aborted` (START) | Pod 생성 후 예기치 않게 중단됨 (Pod 삭제 시도, 알림 발송) |
 | `no_pod` | 종료 시점에 기동 중인 Pod가 없음 |
@@ -281,7 +279,7 @@ STOP (종료 시):
 HEALTH (업무시간 감시, 상태가 바뀔 때만 기록. 정상 점검은 기록하지 않는다):
 ```json
 {"event":"HEALTH","ts":"2026-11-16T13:24:00+09:00","result":"down",
- "pod_id":"abc123xyz","gpu":"NVIDIA RTX A6000","check":"B","detail":"timeout 20s","fail_count":3,
+ "pod_id":"abc123xyz","gpu":"NVIDIA A40","check":"B","detail":"timeout 20s","fail_count":3,
  "recover_count_today":0}
 ```
 
@@ -401,7 +399,7 @@ CloudWatch 대시보드 `voc-llm` 하나에 아래 6개 위젯을 둔다.
 
 1. `pod-start.sh` 수동 실행: START 로그가 남고, `/v1/models`가 200을 주는지 확인한다.
 2. `gpu-priority.txt`의 1순위를 없는 ID로 바꾸고 실행: 2순위 GPU로 기동되는지, 로그의 `gpu` 값이 맞는지 확인한다.
-3. `NETWORK_VOLUME_ID`를 잘못된 값으로 바꾸고 실행: 2단계(볼륨 없음)로 기동되는지, 로그에 `stage:2`가 찍히는지 확인한다.
+3. 모델 다운로드 포함 `ready_sec`가 15분 제한 안에 들어오는지(실측 약 4분) 확인한다.
 4. `pod-stop.sh` 실행: STOP 로그가 남고 RunPod 콘솔에서 Pod가 사라졌는지 확인한다. API 호출 결과가 503인지 확인한다.
 5. 잘못된 키로 호출했을 때 401, 허용되지 않은 IP에서 호출했을 때 연결이 거부되는지 확인한다.
 6. `stream: true`와 `stream: false` 요청이 모두 정상 응답하는지 확인한다.
