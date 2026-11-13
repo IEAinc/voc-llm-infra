@@ -1,0 +1,99 @@
+# EC2 중계 서버 배포 (수동 실행: Actions → aws_build_deploy → Run workflow)
+#
+# 1) build: 셸 단위 테스트(tests/run.sh)와 eval 단위 테스트를 돌린다. 실패하면 배포하지 않는다.
+# 2) deploy: 보안그룹 22번을 이 러너 IP 에만 잠시 열고, ec2/ 를 복사해 install.sh 를 실행한 뒤 다시 닫는다.
+#    서버의 /opt/voc-llm/.env, 고객사 키, 인증서, 현재 upstream 은 install.sh 가 보존한다.
+#
+# 저장소 Settings → Secrets and variables → Actions 에 등록:
+#   Secrets  : AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY  (VOC 전용 IAM 사용자 voc-llm-admin)
+#              EC2_SSH_KEY                               (infra/voc-llm-key.pem 내용 전체)
+#   Variables: EC2_HOST (예: 43.200.20.252), SG_ID (예: sg-...), DOMAIN (예: 43-200-20-252.sslip.io)
+name: aws_build_deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: "테스트 생략 (긴급 배포용)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: aws-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ap-northeast-2
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    if: ${{ !inputs.skip_tests }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell unit tests
+        run: bash tests/run.sh
+      - name: Eval unit tests
+        working-directory: eval
+        run: python3 -m unittest -v test_run_eval
+
+  deploy:
+    needs: build
+    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Open SSH to this runner
+        id: sg
+        run: |
+          ip=$(curl -sf https://checkip.amazonaws.com)
+          echo "cidr=$ip/32" >> "$GITHUB_OUTPUT"
+          aws ec2 authorize-security-group-ingress --group-id "${{ vars.SG_ID }}" --ip-permissions \
+            "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=$ip/32,Description=github-actions-deploy}]"
+
+      - name: Prepare SSH key
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy.pem
+          chmod 600 ~/.ssh/deploy.pem
+          for i in 1 2 3 4 5; do ssh-keyscan -T 10 "${{ vars.EC2_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null && break; sleep 3; done
+
+      - name: Copy and install
+        env:
+          SSH: ssh -i ~/.ssh/deploy.pem -o BatchMode=yes ubuntu@${{ vars.EC2_HOST }}
+        run: |
+          rm -f ec2/.env   # 저장소에는 없지만 혹시 모를 로컬 비밀값 전송 방지
+          $SSH 'rm -rf ~/voc-llm-deploy && mkdir -p ~/voc-llm-deploy'
+          scp -i ~/.ssh/deploy.pem -o BatchMode=yes -r ec2 "ubuntu@${{ vars.EC2_HOST }}:~/voc-llm-deploy/"
+          $SSH 'sudo bash ~/voc-llm-deploy/ec2/install.sh > /tmp/voc-llm-install.log 2>&1; rc=$?; tail -n 5 /tmp/voc-llm-install.log; exit $rc'
+          $SSH 'systemctl is-active nginx cron amazon-cloudwatch-agent'
+
+      - name: Health check
+        env:
+          SSH: ssh -i ~/.ssh/deploy.pem -o BatchMode=yes ubuntu@${{ vars.EC2_HOST }}
+        run: |
+          # 443 은 고객사/관리자 IP 에만 열려 있어 러너에서 직접 못 부른다. 서버 안에서 TLS 포함 확인
+          for i in 1 2 3 4 5 6; do
+            r=$($SSH "curl -s --max-time 10 --resolve ${{ vars.DOMAIN }}:443:127.0.0.1 https://${{ vars.DOMAIN }}/healthz" || true)
+            [ "$r" = ok ] && { echo "healthz ok"; exit 0; }
+            sleep 5
+          done
+          echo "healthz 실패"; exit 1
+
+      - name: Close SSH
+        if: always() && steps.sg.outputs.cidr != ''
+        run: |
+          aws ec2 revoke-security-group-ingress --group-id "${{ vars.SG_ID }}" --ip-permissions \
+            "IpProtocol=tcp,FromPort=22,ToPort=22,IpRanges=[{CidrIp=${{ steps.sg.outputs.cidr }}}]"
+          rm -f ~/.ssh/deploy.pem
