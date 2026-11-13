@@ -47,7 +47,12 @@ fi
 rm -f /etc/nginx/sites-enabled/default
 envsubst '${DOMAIN} ${VLLM_API_KEY}' < "$SRC/conf/nginx/voc-llm.conf.tmpl" > /etc/nginx/conf.d/voc-llm.conf
 chmod 600 /etc/nginx/conf.d/voc-llm.conf
-[ -f /etc/nginx/voc-llm/client_keys.conf ] || install -m 600 "$SRC/conf/nginx/client_keys.conf.example" /etc/nginx/voc-llm/client_keys.conf
+if [ ! -f /etc/nginx/voc-llm/client_keys.conf ]; then
+  KEY=$(openssl rand -hex 32)
+  install -m 600 /dev/null /etc/nginx/voc-llm/client_keys.conf
+  { cat "$SRC/conf/nginx/client_keys.conf.example"; echo "\"Bearer $KEY\" 1;"; } > /etc/nginx/voc-llm/client_keys.conf
+  echo "고객사 API 키(최초 생성, 고객사에 전달 후 이 화면 기록은 지우세요): $KEY"
+fi
 [ -f /etc/nginx/voc-llm/upstream.conf ] || VOC_NO_RELOAD=1 bash -c ". $APP/bin/lib.sh; upstream_off"
 install -D -m 644 "$SRC/conf/systemd/nginx-override.conf" /etc/systemd/system/nginx.service.d/override.conf
 
@@ -77,4 +82,4 @@ systemctl enable amazon-cloudwatch-agent
 # 공휴일 최초 갱신 (실패해도 설치는 계속. 실패 시 이번 주는 평일 모두 운영)
 "$APP/bin/holiday-sync.sh" || echo "공휴일 갱신 실패: HOLIDAY_API_KEY 확인 후 $APP/bin/holiday-sync.sh 재실행"
 
-echo "install 완료. 고객사 키: /etc/nginx/voc-llm/client_keys.conf 수정 후 'systemctl reload nginx'"
+echo "install 완료. 고객사 키 추가/교체: /etc/nginx/voc-llm/client_keys.conf 수정 후 'systemctl reload nginx'"
