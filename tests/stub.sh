@@ -42,3 +42,36 @@ vllm_status() {
   if [ -n "${FAKE_VLLM_BAD_HOST:-}" ] && [ "$1" = "$FAKE_VLLM_BAD_HOST" ]; then echo 000; return; fi
   echo "${FAKE_VLLM_CODE:-200}"
 }
+
+# FAKE_HOLIDAY_MODE: ok(기본) | fail | badcode | xml | few
+# FAKE_HOLIDAY_FAILS=N : 처음 N번 호출 실패
+# FAKE_HOLIDAY_MAX_YEAR=YYYY : 이 연도보다 큰 해는 0건 응답 (내년 자료 미공개 상황)
+fake_holidays() {  # fake_holidays YEAR COUNT : isHoliday=Y COUNT 개 + isHoliday=N 1개
+  jq -nc --arg y "$1" --argjson c "$2" '
+    ["0101","0301","0505","0606","0815","1003","1009","1225","0128","0129","0130","0524","0603","0917","0918","0919"] as $d
+    | {response: {header: {resultCode: "00", resultMsg: "NORMAL SERVICE."},
+                  body: {items: {item: (
+                    [range(0; $c) | {dateName: "휴일", isHoliday: "Y", locdate: (($y + $d[.]) | tonumber)}]
+                    + [{dateName: "기념일", isHoliday: "N", locdate: (($y + "0402") | tonumber)}])}}}}'
+}
+
+holiday_api() {
+  echo "HOLIDAY_API $1" >> "$T/calls"
+  local n
+  n=$(cat "$T/hapi_n" 2>/dev/null || echo 0)
+  echo $((n + 1)) > "$T/hapi_n"
+  if [ "$n" -lt "${FAKE_HOLIDAY_FAILS:-0}" ]; then return 1; fi
+  case "${FAKE_HOLIDAY_MODE:-ok}" in
+    fail) return 1 ;;
+    badcode) echo '{"response":{"header":{"resultCode":"30","resultMsg":"SERVICE_KEY_IS_NOT_REGISTERED_ERROR"}}}' ;;
+    xml) echo '<OpenAPI_ServiceResponse><cmmMsgHeader><returnReasonCode>30</returnReasonCode></cmmMsgHeader></OpenAPI_ServiceResponse>' ;;
+    few) fake_holidays "$1" 3 ;;
+    *)
+      if [ "$1" -gt "${FAKE_HOLIDAY_MAX_YEAR:-9999}" ]; then
+        echo '{"response":{"header":{"resultCode":"00"},"body":{"items":"","totalCount":0}}}'
+      else
+        fake_holidays "$1" 15
+      fi
+      ;;
+  esac
+}

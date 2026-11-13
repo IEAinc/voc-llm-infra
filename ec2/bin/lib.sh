@@ -14,6 +14,9 @@ CREATE_RETRIES="${CREATE_RETRIES:-3}"
 CREATE_RETRY_SEC="${CREATE_RETRY_SEC:-600}"
 HEALTH_FAIL_LIMIT="${HEALTH_FAIL_LIMIT:-3}"
 MAX_RECOVER="${MAX_RECOVER:-3}"
+HOLIDAY_API_URL="${HOLIDAY_API_URL:-https://apis.data.go.kr/B090041/openapi/service/SpcdeInfoService/getRestDeInfo}"
+HOLIDAY_RETRIES="${HOLIDAY_RETRIES:-3}"
+HOLIDAY_RETRY_SEC="${HOLIDAY_RETRY_SEC:-600}"
 
 if [ -f "$VOC_HOME/.env" ]; then
   set -a
@@ -26,7 +29,12 @@ mkdir -p "$STATE_DIR" "$(dirname "$LOG_FILE")"
 now_iso()    { date +%Y-%m-%dT%H:%M:%S%:z; }
 now_epoch()  { date +%s; }
 today()      { echo "${VOC_TODAY:-$(date +%F)}"; }
-is_holiday() { grep -qxF "$(today)" "$VOC_HOME/holidays.txt" 2>/dev/null; }
+# 수동 휴무일은 항상 적용. API 공휴일은 마지막 갱신이 성공했을 때만 적용 (실패한 주는 평일 모두 운영)
+is_holiday() {
+  if grep -qxF "$(today)" "$VOC_HOME/holidays.txt" 2>/dev/null; then return 0; fi
+  if [ -f "$STATE_DIR/holiday_sync_failed" ]; then return 1; fi
+  grep -qxF "$(today)" "$VOC_HOME/holidays-api.txt" 2>/dev/null
+}
 sleep_s()    { sleep "$1"; }
 
 # log_event EVENT RESULT [--arg k v | --argjson k v ...]
@@ -324,6 +332,43 @@ do_health() {
     --argjson fail_count "$fail" --argjson recover_count_today "$(recover_count)"
   notify "RunPod DOWN" "RunPod 장애 감지: pod $id ($gpu), 점검 $check, $detail. 자동 복구를 시작합니다."
   health_recover
+}
+
+# holiday_api YEAR : 공공데이터포털 특일정보(공휴일) 원본 응답
+holiday_api() {
+  curl -sS -f -m 20 -G "$HOLIDAY_API_URL" --data-urlencode "serviceKey=${HOLIDAY_API_KEY:-}" \
+    -d "solYear=$1" -d numOfRows=100 -d _type=json
+}
+
+# holiday_dates JSON : resultCode 00 이고 isHoliday=Y 인 날짜를 YYYY-MM-DD 로 출력. 0건/비정상이면 실패
+holiday_dates() {
+  jq -er 'select(.response.header.resultCode == "00")
+    | ((.response.body.items | if type == "object" then .item else null end) // [])
+    | (if type == "array" then . elif type == "object" then [.] else [] end)
+    | map(select(.isHoliday == "Y") | (.locdate | tostring) | "\(.[0:4])-\(.[4:6])-\(.[6:8])")
+    | .[]' <<<"$1" 2>/dev/null
+}
+
+do_holiday_sync() {
+  local year next i raw cur="" nxt="" nn=0
+  year=$(today | cut -c1-4)
+  next=$((year + 1))
+  for ((i = 0; i < HOLIDAY_RETRIES; i++)); do
+    if [ "$i" -gt 0 ]; then sleep_s "$HOLIDAY_RETRY_SEC"; fi
+    if raw=$(holiday_api "$year") && cur=$(holiday_dates "$raw") && [ "$(wc -l <<<"$cur")" -ge 10 ]; then break; fi
+    cur=""
+  done
+  if [ -z "$cur" ]; then
+    touch "$STATE_DIR/holiday_sync_failed"
+    log_event HOLIDAY_SYNC failed --argjson year "$year" --argjson attempts "$HOLIDAY_RETRIES"
+    notify "Holiday sync failed" "공휴일 API 갱신에 ${HOLIDAY_RETRIES}회 실패했습니다. 다음 갱신이 성공할 때까지 공휴일 판정을 끄고 평일에는 모두 운영합니다(holidays.txt 수동 휴무일은 계속 적용). HOLIDAY_API_KEY 확인 후 holiday-sync.sh 를 수동 실행하세요."
+    return 1
+  fi
+  if raw=$(holiday_api "$next") && nxt=$(holiday_dates "$raw"); then nn=$(wc -l <<<"$nxt"); else nxt=""; fi
+  { printf '%s\n' "$cur"; if [ -n "$nxt" ]; then printf '%s\n' "$nxt"; fi; } | sort -u > "$VOC_HOME/holidays-api.txt.tmp"
+  mv "$VOC_HOME/holidays-api.txt.tmp" "$VOC_HOME/holidays-api.txt"
+  rm -f "$STATE_DIR/holiday_sync_failed"
+  log_event HOLIDAY_SYNC ok --argjson year "$year" --argjson count "$(wc -l < "$VOC_HOME/holidays-api.txt")" --argjson next_year_count "$nn"
 }
 
 if [ -n "${VOC_STUB:-}" ]; then
