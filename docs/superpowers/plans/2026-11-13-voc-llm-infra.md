@@ -1644,7 +1644,7 @@ if [ "$SG" = None ]; then
 fi
 
 # EC2
-IID=$(aws ec2 describe-instances --filters Name=tag:Name,Values=voc-llm-relay Name=instance-state-name,Values=pending,running,stopped \
+IID=$(aws ec2 describe-instances --filters Name=tag:Name,Values=voc-llm-gateway Name=instance-state-name,Values=pending,running,stopped \
   --query 'Reservations[0].Instances[0].InstanceId' --output text)
 if [ "$IID" = None ]; then
   AMI=$(aws ssm get-parameter --name /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id \
@@ -1652,7 +1652,7 @@ if [ "$IID" = None ]; then
   IID=$(aws ec2 run-instances --image-id "$AMI" --instance-type t3.small --key-name "$KEY_NAME" \
     --security-group-ids "$SG" --iam-instance-profile Name=voc-llm-ec2 \
     --block-device-mappings 'DeviceName=/dev/sda1,Ebs={VolumeSize=20,VolumeType=gp3}' \
-    --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=voc-llm-relay}]' \
+    --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=voc-llm-gateway}]' \
     --query 'Instances[0].InstanceId' --output text)
   aws ec2 wait instance-running --instance-ids "$IID"
 fi

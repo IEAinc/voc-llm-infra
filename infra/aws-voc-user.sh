@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # VOC 전용 운영 IAM 사용자(voc-llm-admin)를 만들고 로컬 AWS CLI 프로필 voc-llm 으로 등록한다.
 # 관리자 프로필(aws.env 의 AWS_PROFILE)로 실행. 재실행하면 정책만 갱신한다 (액세스 키는 처음 1회만 발급).
-# 권한 범위: Project=voc-llm 태그가 붙은 EC2/보안그룹, voc-llm* 이름의 SNS/알람/대시보드/EventBridge 규칙,
+# 권한 범위: Project=voc-llm 태그가 붙은 EC2/보안그룹(EC2·볼륨은 Name 태그 변경만), voc-llm* 이름의 SNS/알람/대시보드/EventBridge 규칙,
 # Route 53 health check(리소스 단위 제한 불가), 그리고 조회 권한.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -25,6 +25,10 @@ DOC=$(cat <<EOF
      "Action": ["ec2:StartInstances", "ec2:StopInstances", "ec2:RebootInstances",
       "ec2:ModifyInstanceAttribute", "ec2:GetConsoleOutput", "ec2:GetConsoleScreenshot",
       "ec2:MonitorInstances", "ec2:UnmonitorInstances"]},
+    {"Sid": "NameTag", "Effect": "Allow", "Action": "ec2:CreateTags",
+     "Resource": ["arn:aws:ec2:$REGION:$ACCT:instance/*", "arn:aws:ec2:$REGION:$ACCT:volume/*"],
+     "Condition": {"StringEquals": {"aws:ResourceTag/Project": "voc-llm"},
+                   "ForAllValues:StringEquals": {"aws:TagKeys": ["Name"]}}},
     {"Sid": "SecurityGroup", "Effect": "Allow", "Resource": "arn:aws:ec2:$REGION:$ACCT:security-group/*",
      "Condition": {"StringEquals": {"aws:ResourceTag/Project": "voc-llm"}},
      "Action": ["ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress",
