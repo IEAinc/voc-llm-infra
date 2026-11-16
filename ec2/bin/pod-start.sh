@@ -10,6 +10,10 @@ flock 9
 trigger=cron
 if [ "${1:-}" = "--force" ]; then trigger=manual; fi
 
+if [ "$trigger" = cron ] && [ -f "$STATE_DIR/paused" ]; then
+  log_event START skipped_paused
+  exit 0
+fi
 if [ "$trigger" = cron ] && is_holiday; then
   log_event START skipped_holiday
   exit 0

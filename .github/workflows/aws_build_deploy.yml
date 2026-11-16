@@ -1,4 +1,8 @@
 # EC2 중계 서버 배포 (수동 실행: Actions → aws_build_deploy → Run workflow)
+# action 선택 (EC2 는 어느 경우에도 끄지 않는다. 자세한 설명: docs/운영-가이드.md)
+#   deploy : 코드만 배포. 실행 중인 Pod 와 일시정지 상태는 그대로
+#   pause  : 코드 배포 + 실행 중인 Pod 종료 + 일시정지 (08:30 자동 기동, 업무시간 감시 중단)
+#   resume : 코드 배포 + 일시정지 해제 + 실행 중인 Pod 종료. 업무시간이면 새 Pod 기동
 #
 # 1) build: 셸 단위 테스트(tests/run.sh)와 eval 단위 테스트를 돌린다. 실패하면 배포하지 않는다.
 # 2) deploy: 보안그룹 22번을 이 러너 IP 에만 잠시 열고, ec2/ 를 복사해 install.sh 를 실행한 뒤 다시 닫는다.
@@ -13,6 +17,11 @@ name: aws_build_deploy
 on:
   workflow_dispatch:
     inputs:
+      action:
+        description: "deploy=코드만 / pause=Pod 종료+일시정지 / resume=일시정지 해제+Pod 재기동"
+        type: choice
+        options: [deploy, pause, resume]
+        default: deploy
       skip_tests:
         description: "테스트 생략 (긴급 배포용)"
         type: boolean
@@ -79,7 +88,20 @@ jobs:
           $SSH 'sudo bash ~/voc-llm-deploy/ec2/install.sh > /tmp/voc-llm-install.log 2>&1; rc=$?; tail -n 5 /tmp/voc-llm-install.log; exit $rc'
           $SSH 'systemctl is-active nginx cron amazon-cloudwatch-agent'
 
+      - name: Run action (${{ inputs.action }})
+        if: inputs.action != 'deploy'
+        env:
+          SSH: ssh -i ~/.ssh/deploy.pem -o BatchMode=yes ubuntu@${{ vars.EC2_HOST }}
+        run: $SSH "sudo /opt/voc-llm/bin/voc-ctl.sh ${{ inputs.action }}"
+
+      - name: Status
+        env:
+          SSH: ssh -i ~/.ssh/deploy.pem -o BatchMode=yes ubuntu@${{ vars.EC2_HOST }}
+        run: |
+          $SSH 'sudo /opt/voc-llm/bin/voc-ctl.sh status; sudo tail -n 3 /var/log/voc-llm/pod.log' | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Health check
+        timeout-minutes: 2
         env:
           SSH: ssh -i ~/.ssh/deploy.pem -o BatchMode=yes ubuntu@${{ vars.EC2_HOST }}
         run: |

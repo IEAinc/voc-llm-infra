@@ -60,6 +60,7 @@ VOC 시스템 ──HTTPS(고정 도메인)──▶ AWS EC2 t3.small (서울)
 
 - [aws-설계.md](aws-설계.md): EC2, nginx, cron 스크립트, 로그 형식, 운영 절차, 자원 및 생존 모니터링
 - [runpod-설계.md](runpod-설계.md): 모델 로딩, Pod 생성 사양, vLLM 설정, 모델 후보, GPU 호환성
+- [docs/운영-가이드.md](docs/운영-가이드.md): 배포 버튼(deploy/pause/resume), 일시정지, 상태 확인, 알림, 키 교체
 
 ## 6. 범위 외 (1차)
 

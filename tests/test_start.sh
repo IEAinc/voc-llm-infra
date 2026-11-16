@@ -105,6 +105,42 @@ t_start_resets_recover_counters() {
   assert_no_file "$VOC_HOME/state/gave_up_20261116"
 }
 
-run_tests t_start_ok t_start_retry_then_ok t_start_no_gpu t_start_not_ready_deletes_pod \
+t_start_paused_skips_cron() {
+  touch "$VOC_HOME/state/paused"
+  start || fail "paused cron start should exit 0"
+  assert_eq "$(events)" "START:skipped_paused" "events"
+  assert_eq "$(calls_count 'RP POST')" 0 "no pod created"
+}
+
+t_start_force_ignores_paused() {
+  touch "$VOC_HOME/state/paused"
+  start --force || fail "force should start"
+  assert_eq "$(events)" "START:ok" "events"
+}
+
+ctl() { bash "$BIN/voc-ctl.sh" "$@"; }
+
+t_ctl_pause_stops_pod() {
+  start
+  ctl pause
+  [ -f "$VOC_HOME/state/paused" ] || fail "paused flag"
+  assert_eq "$(events)" "START:ok STOP:ok" "events"
+}
+
+t_ctl_resume_in_hours_restarts() {
+  start; touch "$VOC_HOME/state/paused"
+  VOC_NOW_DOW=1 VOC_NOW_HM=1000 ctl resume
+  assert_no_file "$VOC_HOME/state/paused"
+  assert_eq "$(events)" "START:ok STOP:ok START:ok" "events"
+}
+
+t_ctl_resume_off_hours_waits() {
+  touch "$VOC_HOME/state/paused"
+  VOC_NOW_DOW=1 VOC_NOW_HM=1900 ctl resume
+  assert_no_file "$VOC_HOME/state/paused"
+  assert_eq "$(calls_count 'RP POST')" 0 "no pod off hours"
+}
+
+run_tests t_start_paused_skips_cron t_start_force_ignores_paused t_ctl_pause_stops_pod   t_ctl_resume_in_hours_restarts t_ctl_resume_off_hours_waits t_start_ok t_start_retry_then_ok t_start_no_gpu t_start_not_ready_deletes_pod \
   t_start_not_ready_counts_slow_checks t_start_abort_deletes_pod \
   t_start_skips_holiday t_start_force_on_holiday t_start_already_running t_start_already_running_reenables_upstream t_start_already_running_not_ready_restarts t_start_resets_recover_counters

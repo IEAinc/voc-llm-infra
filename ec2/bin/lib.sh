@@ -290,7 +290,7 @@ health_recover() {
 do_health() {
   local day fail cur id gpu rc st status="" code check detail
   day=$(today | tr -d -)
-  if [ -f "$STATE_DIR/maintenance" ] || [ -f "$STATE_DIR/gave_up_$day" ]; then return 0; fi
+  if [ -f "$STATE_DIR/maintenance" ] || [ -f "$STATE_DIR/paused" ] || [ -f "$STATE_DIR/gave_up_$day" ]; then return 0; fi
 
   if [ ! -f "$STATE_DIR/current_pod" ]; then
     log_event HEALTH no_pod --argjson recover_count_today "$(recover_count)"

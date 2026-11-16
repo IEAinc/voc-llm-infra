@@ -103,7 +103,14 @@ t_health_skips_when_locked() {
   assert_eq "$(events)" "START:ok" "skipped while locked"
 }
 
-run_tests t_health_ok_logs_nothing t_health_degraded_then_self_recovered t_health_down_check_b_replaces_pod \
+t_health_paused_skips() {
+  start
+  touch "$VOC_HOME/state/paused"
+  FAKE_POD_STATUS=GONE health
+  assert_eq "$(events)" "START:ok" "no action while paused"
+}
+
+run_tests t_health_paused_skips t_health_ok_logs_nothing t_health_degraded_then_self_recovered t_health_down_check_b_replaces_pod \
   t_health_down_check_a_immediate t_health_pod_404_is_down t_health_runpod_api_down_uses_check_b_only \
   t_health_no_pod_triggers_start t_health_gives_up_after_3_recoveries t_health_maintenance_skips \
   t_health_holiday_skips t_health_skips_when_locked
