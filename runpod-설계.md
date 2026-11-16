@@ -4,7 +4,7 @@
 
 | 항목 | 설정 |
 |---|---|
-| 클라우드 | **Secure Cloud만** 사용한다 (Community는 테스트에서도 VOC 데이터를 넣지 않는다) |
+| 클라우드 | **Secure Cloud만** 사용한다 |
 | RunPod API 키 | 권한을 최소로 둔 키 1개 발급. AWS `/opt/voc-llm/.env`에만 보관한다 |
 | HF 토큰 | read 권한. Gemma 계열 라이선스 동의 계정으로 발급한다 |
 | vLLM 내부 키 | 무작위 32바이트 이상 (`VLLM_API_KEY`). AWS nginx만 알고 있다 |
@@ -12,7 +12,7 @@
 
 ## 2. 모델 로딩
 
-Network Volume은 쓰지 않는다(3안). Pod는 매일 새로 만들고, 기동할 때마다 vLLM이 모델을 Hugging Face에서 컨테이너 디스크(`HF_HOME=/root/.cache/huggingface`, 40GB)로 받는다.
+Network Volume은 쓰지 않는다. Pod는 매일 새로 만들고, 기동할 때마다 vLLM이 모델을 Hugging Face에서 컨테이너 디스크(`HF_HOME=/root/.cache/huggingface`, 40GB)로 받는다.
 볼륨이 없으므로 RunPod가 재고가 있는 아무 Secure 데이터센터에 Pod를 띄운다.
 
 실측 (2026-11-13, A40, EU-SE-1 / CA-MTL-1, `google/gemma-4-31B-it-qat-w4a16-ct`, `vllm/vllm-openai:v0.33.0`):
@@ -34,8 +34,6 @@ Network Volume은 쓰지 않는다(3안). Pod는 매일 새로 만들고, 기동
 | 4 | RTX PRO 5000 Blackwell | Blackwell (12.0) | $0.96 | |
 | 5 | L40S 48GB | Ada (8.9) | $1.09 | |
 | 6 | RTX 6000 Ada 48GB | Ada (8.9) | $1.09 | |
-
-RTX PRO 6000 MIG 48GB는 REST API `gpuTypeIds` enum에 없어 생성할 수 없으므로 제외했다.
 
 호환성 원칙:
 - **CUDA 12.8 이상 vLLM 이미지**를 쓴다. 이 이미지는 Ampere부터 Blackwell까지 6종 모두를 지원한다. 이미지 태그는 버전을 고정한다(예: `vllm/vllm-openai:v0.x.y`, 확정: `v0.33.0`). `latest`는 쓰지 않는다.
@@ -83,13 +81,11 @@ AWS `pod-start.sh`가 `POST https://rest.runpod.io/v1/pods`로 보내는 내용�
 
 | 모델 | 구조 | 예상 VRAM(가중치) | HF repo |
 |---|---|---|---|
-| Gemma 4 26B A4B QAT-Q4 | MoE, 활성 4B | 약 15GB | `cyankiwi/gemma-4-26B-A4B-it-qat-AWQ-INT4` (공식 qat-w4a16-ct repo는 공개되어 있지 않다. 31B와 같은 QAT 기반이라 공정한 비교가 된다) |
+| Gemma 4 26B A4B QAT-Q4 | MoE, 활성 4B | 약 15GB | `cyankiwi/gemma-4-26B-A4B-it-qat-AWQ-INT4` 구글 공식 qat awq 모델이 없음 |
 | Gemma 4 31B QAT-Q4 | Dense | 약 18GB | `google/gemma-4-31B-it-qat-w4a16-ct` |
 | Qwen3.6-35B-A3B AWQ-4bit | MoE, 활성 3B | 약 20GB | `QuantTrio/Qwen3.6-35B-A3B-AWQ` |
 | Qwen3.8-27B AWQ-4bit | Dense VLM | 약 17GB | `cyankiwi/Qwen3.8-27B-AWQ-INT4` |
 
-- "QAT-Q4" GGUF(Q4_0)는 llama.cpp용이라 사용하지 않는다. 같은 QAT 가중치의 vLLM 형식(w4a16-ct)을 쓴다.
-- MoE 2종(26B A4B, 35B A3B)은 활성 파라미터가 작아서 토큰 속도가 Dense보다 빠를 것으로 예상된다. Dense 2종은 품질이 우세할 가능성이 있다.
 
 ### 5.1 선정 방법
 
