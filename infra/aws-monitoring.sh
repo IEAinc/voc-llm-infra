@@ -31,29 +31,29 @@ aws sns set-topic-attributes --topic-arn "$TOPIC" --attribute-name Policy --attr
 TOPIC_USE1=$(aws sns create-topic --region us-east-1 --name voc-llm-alerts --query TopicArn --output text)
 subscribe_once us-east-1 "$TOPIC_USE1"
 
-# 2) 자원 알람
+# 2) 자원 알람. EC2 가 꺼진 밤사이 지표가 없어도 INSUFFICIENT_DATA 로 바뀌지 않게 notBreaching (아침 OK 메일 방지)
 EC2DIM="Name=InstanceId,Value=$IID"
 alarm() {  # alarm NAME [put-metric-alarm 인자...]
   local name=$1; shift
   aws cloudwatch put-metric-alarm --alarm-name "voc-llm-$name" --alarm-actions "$TOPIC" --ok-actions "$TOPIC" "$@"
 }
-alarm cpu-high        --namespace AWS/EC2 --metric-name CPUUtilization   --dimensions "$EC2DIM" --statistic Average --period 300 --evaluation-periods 3 --threshold 80 --comparison-operator GreaterThanThreshold
-alarm cpu-credit-low  --namespace AWS/EC2 --metric-name CPUCreditBalance --dimensions "$EC2DIM" --statistic Minimum --period 300 --evaluation-periods 1 --threshold 30 --comparison-operator LessThanThreshold
-alarm mem-high        --namespace VOC-LLM --metric-name mem_used_percent  --dimensions "$EC2DIM" --statistic Average --period 60 --evaluation-periods 5 --threshold 85 --comparison-operator GreaterThanThreshold
-alarm swap-high       --namespace VOC-LLM --metric-name swap_used_percent --dimensions "$EC2DIM" --statistic Average --period 60 --evaluation-periods 5 --threshold 50 --comparison-operator GreaterThanThreshold
+alarm cpu-high        --namespace AWS/EC2 --metric-name CPUUtilization   --dimensions "$EC2DIM" --statistic Average --period 300 --evaluation-periods 3 --threshold 80 --comparison-operator GreaterThanThreshold --treat-missing-data notBreaching
+alarm cpu-credit-low  --namespace AWS/EC2 --metric-name CPUCreditBalance --dimensions "$EC2DIM" --statistic Minimum --period 300 --evaluation-periods 1 --threshold 30 --comparison-operator LessThanThreshold --treat-missing-data notBreaching
+alarm mem-high        --namespace VOC-LLM --metric-name mem_used_percent  --dimensions "$EC2DIM" --statistic Average --period 60 --evaluation-periods 5 --threshold 85 --comparison-operator GreaterThanThreshold --treat-missing-data notBreaching
+alarm swap-high       --namespace VOC-LLM --metric-name swap_used_percent --dimensions "$EC2DIM" --statistic Average --period 60 --evaluation-periods 5 --threshold 50 --comparison-operator GreaterThanThreshold --treat-missing-data notBreaching
 # Agent 중단: mem 지표가 10분간 없으면 (값 자체는 0 미만이 될 수 없으므로 누락일 때만 발생)
 alarm agent-missing   --namespace VOC-LLM --metric-name mem_used_percent  --dimensions "$EC2DIM" --statistic SampleCount --period 60 --evaluation-periods 10 --threshold 0 --comparison-operator LessThanThreshold --treat-missing-data breaching
 
 DISK_DIMS=$(aws cloudwatch list-metrics --namespace VOC-LLM --metric-name disk_used_percent --dimensions "$EC2DIM" --query 'Metrics[0].Dimensions' --output json)
 if [ "$DISK_DIMS" = null ]; then echo "disk_used_percent 지표가 아직 없습니다. Agent 설치 5분 뒤 다시 실행하세요." >&2; exit 1; fi
-alarm disk-high --namespace VOC-LLM --metric-name disk_used_percent --dimensions "$DISK_DIMS" --statistic Maximum --period 300 --evaluation-periods 1 --threshold 80 --comparison-operator GreaterThanThreshold
+alarm disk-high --namespace VOC-LLM --metric-name disk_used_percent --dimensions "$DISK_DIMS" --statistic Maximum --period 300 --evaluation-periods 1 --threshold 80 --comparison-operator GreaterThanThreshold --treat-missing-data notBreaching
 
 # 3) 상태 점검 자동 복구 / 재부팅
 aws cloudwatch put-metric-alarm --alarm-name voc-llm-status-system --namespace AWS/EC2 --metric-name StatusCheckFailed_System \
-  --dimensions "$EC2DIM" --statistic Maximum --period 60 --evaluation-periods 2 --threshold 0 --comparison-operator GreaterThanThreshold \
+  --dimensions "$EC2DIM" --statistic Maximum --period 60 --evaluation-periods 2 --threshold 0 --comparison-operator GreaterThanThreshold --treat-missing-data notBreaching \
   --alarm-actions "arn:aws:automate:$REGION:ec2:recover" "$TOPIC" --ok-actions "$TOPIC"
 aws cloudwatch put-metric-alarm --alarm-name voc-llm-status-instance --namespace AWS/EC2 --metric-name StatusCheckFailed_Instance \
-  --dimensions "$EC2DIM" --statistic Maximum --period 60 --evaluation-periods 3 --threshold 0 --comparison-operator GreaterThanThreshold \
+  --dimensions "$EC2DIM" --statistic Maximum --period 60 --evaluation-periods 3 --threshold 0 --comparison-operator GreaterThanThreshold --treat-missing-data notBreaching \
   --alarm-actions "arn:aws:automate:$REGION:ec2:reboot" "$TOPIC" --ok-actions "$TOPIC"
 
 # 4) 외부 생존 확인: Route 53 health check (리전 3곳으로 제한 → SG 규칙과 일치)
