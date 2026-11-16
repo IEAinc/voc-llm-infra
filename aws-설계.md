@@ -29,7 +29,7 @@
 ├── .env                  # RUNPOD_API_KEY, VLLM_API_KEY, HF_TOKEN, MODEL_ID (권한 600)
 ├── gpu-priority.txt      # GPU 우선순위, 한 줄에 하나
 ├── holidays.txt          # 수동 휴무일(회사 자체 휴무 등) YYYY-MM-DD, 한 줄에 하나. 항상 적용
-├── holidays-api.txt      # 공휴일 API 에서 받은 법정공휴일 (holiday-sync.sh 가 덮어씀, 6-2절)
+├── holidays-api.txt      # 공휴일 API 에서 받은 법정공휴일 (holiday-sync.sh 가 덮어씀)
 ├── pod-start.sh
 ├── pod-stop.sh
 ├── pod-health.sh         # 업무시간 RunPod 생존 감시 (6-1절)
@@ -125,7 +125,7 @@ RunPod HTTP proxy는 앞단 Cloudflare 때문에 **약 100초** 동안 응답이
 0 7 * * 1        root /opt/voc-llm/holiday-sync.sh
 ```
 
-- start·health 는 시작할 때 오늘이 휴일이면 종료한다. 휴일 판정 규칙은 6-2절을 따른다. start는 로그를 남기고 종료하고, health는 조용히 종료한다. stop 은 공휴일에도 항상 실행한다(남은 Pod 를 지워야 과금이 멈춘다).
+- start·health 는 시작할 때 오늘이 휴일이면 종료한다. 휴일 판정 규칙은 6-2를 따른다. start는 로그를 남기고 종료하고, health는 조용히 종료한다. stop 은 공휴일에도 항상 실행한다(남은 Pod 를 지워야 과금이 멈춘다).
 - 세 스크립트는 같은 잠금 파일(`flock /var/lock/voc-llm.lock`)을 쓴다. 동시에 실행되지 않게 하기 위해서다.
   - start와 stop은 잠금을 얻을 때까지 기다린다.
   - health는 잠금을 얻지 못하면 바로 종료한다. 기동이나 복구가 진행 중이면 그 회차의 점검은 건너뛴다는 뜻이다.
@@ -322,7 +322,7 @@ HOLIDAY_SYNC (공휴일 갱신, 매주 1줄):
 
 - SNS 토픽 `voc-llm-alerts`를 만들고, 담당자 이메일을 구독(subscription)으로 등록한다.
   슬랙이 필요하면 같은 토픽에 AWS Chatbot을 연결한다.
-- 9.3절의 Route 53 health check 지표는 **us-east-1에만** 생긴다.
+- 9.3의 Route 53 health check 지표는 **us-east-1에만** 생긴다.
   그러므로 us-east-1에도 같은 이름의 SNS 토픽을 만들어 같은 이메일을 구독한다.
 - 알람은 상태가 ALARM으로 바뀔 때와 OK로 돌아올 때 모두 알림을 보낸다. 복구도 알 수 있도록 하기 위해서다.
 
