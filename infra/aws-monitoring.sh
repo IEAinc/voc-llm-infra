@@ -68,10 +68,10 @@ aws cloudwatch put-metric-alarm --region us-east-1 --alarm-name voc-llm-healthz-
   --dimensions "Name=HealthCheckId,Value=$HC" --statistic Minimum --period 60 --evaluation-periods 1 --threshold 1 \
   --comparison-operator LessThanThreshold --treat-missing-data breaching --alarm-actions "$TOPIC_USE1" --ok-actions "$TOPIC_USE1"
 
-# 5) 인스턴스 중지/종료 이벤트
+# 5) 인스턴스 종료(삭제) 이벤트. 매일 18:10 정상 중지는 알리지 않는다(업무시간 중 예기치 않은 중지는 healthz-down 이 잡는다)
 aws events put-rule --name voc-llm-ec2-state --event-pattern "$(jq -nc --arg i "$IID" '{
   source: ["aws.ec2"], "detail-type": ["EC2 Instance State-change Notification"],
-  detail: {"instance-id": [$i], state: ["stopping","stopped","shutting-down","terminated"]}}')" >/dev/null
+  detail: {"instance-id": [$i], state: ["shutting-down","terminated"]}}')" >/dev/null
 aws events put-targets --rule voc-llm-ec2-state --targets "Id=sns,Arn=$TOPIC" >/dev/null
 
 # 6) 대시보드

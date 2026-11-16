@@ -118,12 +118,17 @@ RunPod HTTP proxy는 앞단 Cloudflare 때문에 **약 100초** 동안 응답이
 
 ```cron
 # /etc/cron.d/voc-llm  (TZ=Asia/Seoul)
-30 8 * * 1-5     root /opt/voc-llm/pod-start.sh
-0 18 * * 1-5     root /opt/voc-llm/pod-stop.sh
-30 19 * * 1-5    root /opt/voc-llm/pod-stop.sh   # 안전망: 18:00 stop 이 실패했을 때 재시도
-*/2 9-17 * * 1-5 root /opt/voc-llm/pod-health.sh
-0 7 * * 1        root /opt/voc-llm/holiday-sync.sh
+@reboot          root /opt/voc-llm/bin/voc-ctl.sh boot      # 08:30 Scheduler 가 EC2 를 켜면 Pod 기동, 감시 켜기
+30 8 * * 1-5     root /opt/voc-llm/bin/pod-start.sh
+0 18 * * 1-5     root /opt/voc-llm/bin/pod-stop.sh
+10 18 * * *      root /opt/voc-llm/bin/voc-ctl.sh shutdown  # Pod 가 남아 있으면 끄지 않는다
+30 19 * * *      root /opt/voc-llm/bin/voc-ctl.sh shutdown  # 안전망: 18:10 에 못 껐을 때 재시도
+*/2 9-17 * * 1-5 root /opt/voc-llm/bin/pod-health.sh
+40 8 * * 1       root /opt/voc-llm/bin/holiday-sync.sh
 ```
+
+- EC2 는 평일 08:30 에 EventBridge Scheduler(`voc-llm-ec2-start`, `infra/aws-schedule.sh`)가 켜고, 18:10 에 cron 이 끈다. 끄기 전 알람 알림과 Route 53 health check 를 끄고, 부팅 후 알람이 ALARM 에서 벗어나면 다시 켠다(밤사이 경보와 아침 OK 메일 방지).
+- 08:30 cron 은 부팅이 08:30 이후에 끝나면 실행되지 않는다. 실제 기동은 `@reboot` 의 `voc-ctl.sh boot` 가 하고, 08:30 cron 은 남겨 두어도 같은 잠금과 `already_running` 판정으로 중복 기동하지 않는다.
 
 - start·health 는 시작할 때 오늘이 휴일이면 종료한다. 휴일 판정 규칙은 6-2를 따른다. start는 로그를 남기고 종료하고, health는 조용히 종료한다. stop 은 공휴일에도 항상 실행한다(남은 Pod 를 지워야 과금이 멈춘다).
 - 세 스크립트는 같은 잠금 파일(`flock /var/lock/voc-llm.lock`)을 쓴다. 동시에 실행되지 않게 하기 위해서다.
@@ -214,11 +219,11 @@ RunPod HTTP proxy는 앞단 Cloudflare 때문에 **약 100초** 동안 응답이
 |---|---|
 | 데이터 | 공공데이터포털 "한국천문연구원 특일 정보" `getRestDeInfo` (공휴일 정보) |
 | 키 | `.env`의 `HOLIDAY_API_KEY` (공공데이터포털 일반 인증키, Decoding 값) |
-| 주기 | 매주 월요일 07:00. 08:30 Pod 기동보다 먼저 끝나도록 한다. 설치할 때도 1회 실행한다 |
+| 주기 | 매주 월요일 08:40 (EC2 가 08:30 에 켜진 뒤). 그날 08:30 기동은 지난주에 받은 목록으로 판정한다. 설치할 때도 1회 실행한다 |
 | 대상 | 올해와 내년. 내년 자료가 아직 없으면 올해만 반영한다 |
 
 ```
-1. 올해 공휴일 조회. 실패하면 10분 간격으로 최대 3회 시도 (07:00 / 07:10 / 07:20)
+1. 올해 공휴일 조회. 실패하면 10분 간격으로 최대 3회 시도 (08:40 / 08:50 / 09:00)
    성공 조건: HTTP 200, resultCode "00", isHoliday=Y 항목 10개 이상
    (키 오류일 때 XML 로 오는 응답, 빈 응답, 비정상적으로 적은 개수는 모두 실패로 본다)
 2. 3회 모두 실패

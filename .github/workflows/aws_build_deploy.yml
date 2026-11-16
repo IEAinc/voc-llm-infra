@@ -1,5 +1,5 @@
 # EC2 중계 서버 배포 (수동 실행: Actions → aws_build_deploy → Run workflow)
-# action 선택 (EC2 는 어느 경우에도 끄지 않는다. 자세한 설명: docs/운영-가이드.md)
+# action 선택 (자세한 설명: docs/운영-가이드.md)
 #   deploy : 코드만 배포. 실행 중인 Pod 와 일시정지 상태는 그대로
 #   pause  : 코드 배포 + 실행 중인 Pod 종료 + 일시정지 (08:30 자동 기동, 업무시간 감시 중단)
 #   resume : 코드 배포 + 일시정지 해제 + 실행 중인 Pod 종료. 업무시간이면 새 Pod 기동
@@ -7,11 +7,13 @@
 # 1) build: 셸 단위 테스트(tests/run.sh)와 eval 단위 테스트를 돌린다. 실패하면 배포하지 않는다.
 # 2) deploy: 보안그룹 22번을 이 러너 IP 에만 잠시 열고, ec2/ 를 복사해 install.sh 를 실행한 뒤 다시 닫는다.
 #    서버의 /opt/voc-llm/.env, 고객사 키, 인증서, 현재 upstream 은 install.sh 가 보존한다.
+#    EC2 가 꺼져 있으면(평일 18:10 이후, 주말) 켜서 배포하고, 업무시간 밖이면 끝난 뒤 다시 끈다.
 #
 # 저장소 Settings → Secrets and variables → Actions 에 등록:
 #   Secrets  : AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY  (VOC 전용 IAM 사용자 voc-llm-admin)
 #              EC2_SSH_KEY                               (infra/voc-llm-key.pem 내용 전체)
-#   Variables: EC2_HOST (예: 43.200.20.252), SG_ID (예: sg-...), DOMAIN (예: 43-200-20-252.sslip.io)
+#   Variables: EC2_HOST (예: 43.200.20.252), INSTANCE_ID (예: i-...), SG_ID (예: sg-...),
+#              DOMAIN (예: 43-200-20-252.sslip.io)
 name: aws_build_deploy
 
 on:
@@ -63,6 +65,19 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Start EC2 if stopped
+        id: ec2
+        run: |
+          I="${{ vars.INSTANCE_ID }}"
+          st=$(aws ec2 describe-instances --instance-ids "$I" --query 'Reservations[0].Instances[0].State.Name' --output text)
+          echo "EC2 state: $st"
+          if [ "$st" = stopping ]; then aws ec2 wait instance-stopped --instance-ids "$I"; st=stopped; fi
+          echo "was=$st" >> "$GITHUB_OUTPUT"
+          if [ "$st" = stopped ]; then
+            aws ec2 start-instances --instance-ids "$I" >/dev/null
+            aws ec2 wait instance-running --instance-ids "$I"
+          fi
+
       - name: Open SSH to this runner
         id: sg
         run: |
@@ -76,7 +91,7 @@ jobs:
           install -d -m 700 ~/.ssh
           printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy.pem
           chmod 600 ~/.ssh/deploy.pem
-          for i in 1 2 3 4 5; do ssh-keyscan -T 10 "${{ vars.EC2_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null && break; sleep 3; done
+          for i in $(seq 1 20); do ssh-keyscan -T 10 "${{ vars.EC2_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null && break; sleep 3; done
 
       - name: Copy and install
         env:
@@ -112,6 +127,12 @@ jobs:
             sleep 5
           done
           echo "healthz 실패"; exit 1
+
+      - name: Stop EC2 again (it was stopped)
+        if: always() && steps.ec2.outputs.was == 'stopped'
+        env:
+          SSH: ssh -i ~/.ssh/deploy.pem -o BatchMode=yes ubuntu@${{ vars.EC2_HOST }}
+        run: $SSH 'sudo /opt/voc-llm/bin/voc-ctl.sh shutdown'   # 업무시간이면 끄지 않는다
 
       - name: Close SSH
         if: always() && steps.sg.outputs.cidr != ''
