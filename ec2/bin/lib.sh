@@ -7,7 +7,7 @@ STATE_DIR="$VOC_HOME/state"
 LOG_FILE="${LOG_FILE:-/var/log/voc-llm/pod.log}"
 LOCK_FILE="${LOCK_FILE:-/var/lock/voc-llm.lock}"
 UPSTREAM_CONF="${UPSTREAM_CONF:-/etc/nginx/voc-llm/upstream.conf}"
-RUNPOD_API="${RUNPOD_API:-https://rest.runpod.io/v1}"
+RUNPOD_API="${RUNPOD_API:-https://api.runpod.io/v2}"   # REST v1(rest.runpod.io)은 2026-11-15 종료
 READY_POLL_SEC="${READY_POLL_SEC:-15}"
 READY_TIMEOUT_SEC="${READY_TIMEOUT_SEC:-900}"
 CREATE_RETRIES="${CREATE_RETRIES:-3}"
@@ -69,7 +69,7 @@ upstream_off() {
   write_upstream "return 503 '{\"error\":{\"message\":\"LLM service is available weekdays 09:00-18:00 KST\",\"type\":\"service_unavailable\"}}';"
 }
 
-# rp METHOD PATH [JSON] : 본문 stdout, 반환 0=2xx 4=404 1=그 외/네트워크 오류
+# rp METHOD PATH [JSON] : 본문 stdout, 반환 0=2xx 4=404 3=400/403(이 GPU 배치 불가) 1=그 외/네트워크 오류
 rp() {
   local args=(-sS -m 30 -w '\n%{http_code}' -X "$1" "$RUNPOD_API$2" -H "Authorization: Bearer $RUNPOD_API_KEY")
   if [ $# -ge 3 ]; then args+=(-H 'Content-Type: application/json' -d "$3"); fi
@@ -80,6 +80,7 @@ rp() {
   case $code in
     2??) return 0 ;;
     404) return 4 ;;
+    400|403) return 3 ;;
     *) return 1 ;;
   esac
 }
@@ -91,46 +92,58 @@ vllm_status() {
 
 pod_id_of() { jq -er '.id // empty' <<<"$1" 2>/dev/null; }
 
-# pod_spec : 볼륨 없음. 기동 시 HF 에서 모델을 컨테이너 디스크로 다운로드
+# gpu_list : gpu-priority.txt 의 GPU ID, 우선순위 순. '#' 줄과 빈 줄 제외
+gpu_list() { grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$VOC_HOME/gpu-priority.txt"; }
+
+# pod_spec GPU_ID : REST v2 형식. v2 는 GPU 1종만 받으므로 우선순위 순회는 create_pod 가 한다.
+# 볼륨 없음. 기동 시 HF 에서 모델을 컨테이너 디스크로 다운로드
 pod_spec() {
-  jq -n --rawfile gpus "$VOC_HOME/gpu-priority.txt" \
+  jq -n --arg gpu "$1" \
     --arg image "$VLLM_IMAGE" --arg model "$MODEL_ID" \
     --arg hf "$HF_TOKEN" --arg key "$VLLM_API_KEY" --arg maxlen "${MAX_MODEL_LEN:-32768}" \
     --arg extra "${VLLM_EXTRA_ARGS:-}" '
     {
       name: "voc-llm",
-      cloudType: "SECURE",
-      gpuCount: 1,
-      gpuTypeIds: ($gpus | split("\n") | map(select(length > 0 and (startswith("#") | not)))),
-      gpuTypePriority: "custom",
-      imageName: $image,
-      containerDiskInGb: 40,
+      cloud: "SECURE",
+      gpu: {id: $gpu, count: 1},
+      image: $image,
+      disk: 40,
       ports: ["8000/http"],
       env: {
         HF_TOKEN: $hf,
         VLLM_API_KEY: $key,
         HF_HOME: "/root/.cache/huggingface"
       },
-      dockerStartCmd: (["--model", $model, "--served-model-name", "voc-llm",
-                        "--host", "0.0.0.0", "--port", "8000",
-                        "--max-model-len", $maxlen, "--gpu-memory-utilization", "0.90",
-                        "--kv-cache-dtype", "auto"]
-                       + ($extra | split(" ") | map(select(length > 0))))
+      cmd: (["--model", $model, "--served-model-name", "voc-llm",
+             "--host", "0.0.0.0", "--port", "8000",
+             "--max-model-len", $maxlen, "--gpu-memory-utilization", "0.90",
+             "--kv-cache-dtype", "auto"]
+            + ($extra | split(" ") | map(select(length > 0))))
     }'
 }
 
 # --- 이 아래에 Task 2~4 함수를 추가한다. 스텁 로딩 줄은 항상 파일 마지막에 둔다. ---
 
-# create_pod : CREATE_RETRIES 회 시도, 사이에 CREATE_RETRY_SEC 대기
+# create_pod : gpu-priority.txt 순서로 GPU 를 하나씩 시도하는 회차를 CREATE_RETRIES 회, 사이에 CREATE_RETRY_SEC 대기.
+# 400/403 은 그 GPU 를 배치하지 못한 것으로 보고 다음 GPU 로 넘어간다. 그 외 오류(네트워크, 401, 402, 422, 5xx)는
+# 그 회차를 끝낸다. CREATE_ERR 에 마지막 응답, CREATE_NO_GPU=1 이면 마지막 회차가 모두 400/403 이었다.
 create_pod() {
-  local i out
-  CREATE_FAILS=0
+  local i g out rc
+  CREATE_FAILS=0 CREATE_ERR="" CREATE_NO_GPU=1
   for ((i = 0; i < CREATE_RETRIES; i++)); do
     if [ "$i" -gt 0 ]; then sleep_s "$CREATE_RETRY_SEC"; fi
-    if out=$(rp POST /pods "$(pod_spec)") && pod_id_of "$out" >/dev/null; then
-      printf '%s' "$out" > "$STATE_DIR/created.json"
-      return 0
-    fi
+    CREATE_NO_GPU=1
+    while read -r g; do
+      rc=0
+      out=$(rp POST /pods "$(pod_spec "$g")" 2>&1) || rc=$?
+      if [ "$rc" -eq 0 ] && pod_id_of "$out" >/dev/null; then
+        printf '%s' "$out" > "$STATE_DIR/created.json"
+        return 0
+      fi
+      CREATE_ERR="$g: $(jq -r '.detail // empty' <<<"$out" 2>/dev/null || true)"
+      if [ "$CREATE_ERR" = "$g: " ]; then CREATE_ERR="$g: $(head -c 200 <<<"$out")"; fi
+      if [ "$rc" -ne 3 ]; then CREATE_NO_GPU=0; break; fi
+    done < <(gpu_list)
     CREATE_FAILS=$((CREATE_FAILS + 1))
   done
   return 1
@@ -156,8 +169,13 @@ do_start() {
 
   if ! create_pod; then
     upstream_off || true
-    log_event START failed_no_gpu --arg trigger "$trigger" --arg requested_at "$requested_at" --argjson retries "$CREATE_FAILS"
-    notify "START failed: no GPU" "Secure 48GB GPU를 확보하지 못했습니다(시도 ${CREATE_FAILS}회 모두 실패)."
+    if [ "$CREATE_NO_GPU" = 1 ]; then
+      log_event START failed_no_gpu --arg trigger "$trigger" --arg requested_at "$requested_at" --argjson retries "$CREATE_FAILS" --arg error "$CREATE_ERR"
+      notify "START failed: no GPU" "Secure 48GB GPU를 확보하지 못했습니다(시도 ${CREATE_FAILS}회 모두 실패). 마지막 응답: $CREATE_ERR"
+    else
+      log_event START failed_api --arg trigger "$trigger" --arg requested_at "$requested_at" --argjson retries "$CREATE_FAILS" --arg error "$CREATE_ERR"
+      notify "START failed: RunPod API error" "RunPod API 호출이 실패해 Pod를 만들지 못했습니다(${CREATE_FAILS}회). 키, 잔액, API 주소를 확인하세요. 마지막 응답: $CREATE_ERR"
+    fi
     return 1
   fi
   created_at=$(now_iso)
@@ -171,9 +189,9 @@ do_start() {
   # 생성 응답에 GPU/DC 정보가 없을 수 있어 GET 결과와 합친다
   info=$(rp GET "/pods/$id" 2>/dev/null) || info='{}'
   info=$(jq -cs '.[0] * .[1]' <<<"$pod$info" 2>/dev/null) || info=$pod
-  gpu=$(jq -r '.machine.gpuTypeId // .machine.gpuDisplayName // .gpuTypeId // "unknown"' <<<"$info")
-  dc=$(jq -r '.machine.dataCenterId // .dataCenterId // "unknown"' <<<"$info")
-  cost=$(jq -r '(.costPerHr // .adjustedCostPerHr // 0) | tonumber? // 0' <<<"$info")
+  gpu=$(jq -r '.gpu.id // "unknown"' <<<"$info")
+  dc=$(jq -r '.dataCenterId // "unknown"' <<<"$info")
+  cost=$(jq -r '(.cost // 0) | tonumber? // 0' <<<"$info")
   host="$id-8000.proxy.runpod.net"
 
   ready_start=$(now_epoch)
@@ -308,10 +326,12 @@ do_health() {
   if [ "$rc" -eq 4 ]; then
     status=NOT_FOUND
   elif [ "$rc" -eq 0 ]; then
-    status=$(jq -r '.desiredStatus // "RUNNING"' <<<"$st" 2>/dev/null || echo RUNNING)
+    status=$(jq -r '.status // "RUNNING"' <<<"$st" 2>/dev/null || echo RUNNING)
   fi
 
-  if [ -n "$status" ] && [ "$status" != RUNNING ]; then
+  # PROVISIONING/STARTING 은 일시 상태라 점검 B(vLLM 응답)로 판정한다
+  case "$status" in RUNNING|PROVISIONING|STARTING) status="" ;; esac
+  if [ -n "$status" ]; then
     check=A
     detail="pod status $status"
     fail=$HEALTH_FAIL_LIMIT

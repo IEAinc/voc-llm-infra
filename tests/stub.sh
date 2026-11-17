@@ -1,6 +1,7 @@
 # lib.sh 마지막에 source 되어 네트워크 함수를 대체한다. 모든 호출은 $T/calls 에 기록된다.
 # 동작 제어 환경변수:
-#   FAKE_CREATE_FAILS=N   처음 N번의 POST /pods 실패
+#   FAKE_CREATE_FAILS=N   처음 N번의 POST /pods 가 400(재고 없음). 회차마다 GPU 수만큼 POST 한다
+#   FAKE_CREATE_RC=N      POST /pods 가 항상 이 값으로 실패 (1=API 오류)
 #   FAKE_POD_STATUS       GET /pods/{id}: RUNNING(기본) | EXITED 등 | GONE(404) | APIDOWN(오류)
 #   FAKE_DELETE_RC        DELETE 반환값 (기본 0)
 #   FAKE_VLLM_CODE        vllm_status 기본 응답 (기본 200)
@@ -20,14 +21,15 @@ rp() {
       local n
       n=$(cat "$T/create_n" 2>/dev/null || echo 0)
       echo $((n + 1)) > "$T/create_n"
-      if [ "$n" -lt "${FAKE_CREATE_FAILS:-0}" ]; then echo '{"error":"no instances available"}'; return 1; fi
-      echo "{\"id\":\"pod$((n + 1))\",\"costPerHr\":0.59,\"machine\":{\"gpuTypeId\":\"NVIDIA RTX A6000\",\"dataCenterId\":\"EU-RO-1\"}}"
+      if [ -n "${FAKE_CREATE_RC:-}" ]; then echo '{"title":"Payment Required","status":402,"detail":"insufficient balance"}'; return "$FAKE_CREATE_RC"; fi
+      if [ "$n" -lt "${FAKE_CREATE_FAILS:-0}" ]; then echo '{"title":"Bad Request","status":400,"detail":"no instances available"}'; return 3; fi
+      jq -nc --arg id "pod$((n + 1))" --arg g "$(jq -r .gpu.id <<<"$3")" '{id: $id, cost: 0.59, gpu: {id: $g, count: 1}, dataCenterId: "EU-RO-1", status: "PROVISIONING"}'
       ;;
     "GET /pods/"*)
       case "${FAKE_POD_STATUS:-RUNNING}" in
         GONE) return 4 ;;
         APIDOWN) return 1 ;;
-        *) echo "{\"desiredStatus\":\"${FAKE_POD_STATUS:-RUNNING}\"}" ;;
+        *) echo "{\"status\":\"${FAKE_POD_STATUS:-RUNNING}\"}" ;;
       esac
       ;;
     "DELETE /pods/"*) return "${FAKE_DELETE_RC:-0}" ;;

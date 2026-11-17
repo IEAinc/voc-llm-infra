@@ -141,27 +141,28 @@ RunPod HTTP proxy는 앞단 Cloudflare 때문에 **약 100초** 동안 응답이
 1. 오늘이 공휴일이면 START 로그(result=skipped_holiday)를 남기고 종료
 2. state/current_pod 가 있으면 그 Pod 의 vLLM 을 확인한다. 준비됐으면 upstream ON 으로 다시 맞추고 START 로그(result=already_running) 후 종료. 준비 안 됐으면 삭제(do_stop) 후 새로 기동
 3. Secure 데이터센터 어디서나 생성 (볼륨 없음, 모델은 기동 시 HF에서 다운로드)
-   POST https://rest.runpod.io/v1/pods
-     cloudType=SECURE, gpuTypeIds=gpu-priority.txt 순서, gpuTypePriority=custom,
-     (runpod-설계.md 4장 사양)
-   - 실패(자원 없음)면 10분 간격으로 최대 3회 재시도 (08:30 / 08:40 / 08:50)
-4. 생성에 성공하면 GET /v1/pods/{id} 로 할당된 GPU, 데이터센터, costPerHr 조회
+   POST https://api.runpod.io/v2/pods  (REST v2. v1 rest.runpod.io 는 2026-11-15 종료)
+     cloud=SECURE, gpu={id: <GPU 1종>, count: 1}  (runpod-설계.md 4장 사양)
+   - v2 는 GPU 를 1종만 받는다. gpu-priority.txt 순서로 하나씩 요청하고 201 이 나오면 멈춘다
+   - 400/403 은 그 GPU 배치 불가로 보고 다음 GPU. 그 외 오류(네트워크, 401, 402, 422, 5xx)는 그 회차를 끝낸다
+   - 한 회차가 실패하면 10분 간격으로 최대 3회차 (08:30 / 08:40 / 08:50)
+4. 생성에 성공하면 GET /v2/pods/{id} 로 할당된 GPU(gpu.id), 데이터센터(dataCenterId), 단가(cost) 조회
 5. https://{id}-8000.proxy.runpod.net/v1/models 를 Authorization: Bearer $VLLM_API_KEY 로 호출해서
    200 을 줄 때까지 15초 간격으로 대기 (최대 15분)
 6. 200 이면 upstream.conf ON 으로 교체 → reload → state/current_pod 기록 → START 로그(result=ok)
 7. 5단계 타임아웃이면 Pod 삭제 → upstream OFF 유지 → START 로그(result=failed_not_ready)
-8. 3단계 재시도가 모두 실패하면 START 로그(result=failed_no_gpu)
+8. 3단계 재시도가 모두 실패하면 START 로그. 마지막 회차가 모두 400/403 이면 result=failed_no_gpu,
+   API 오류로 끝났으면 result=failed_api. 둘 다 마지막 응답을 error 필드와 알림 본문에 남긴다
 ```
 
-- `gpuTypePriority=custom`이면 RunPod가 목록 순서대로 자원을 찾는다. 따라서 호출 1번에 GPU fallback이 처리된다.
-- REST API의 필드명과 GPU ID 문자열은 구축할 때 `GET /v1/gputypes`와 API 문서로 확인한 뒤 `gpu-priority.txt`에 기록한다. PRO 6000 MIG 48GB는 `gpuTypeIds` enum에 없어 제외했다.
+- GPU ID 문자열은 `GET https://api.runpod.io/v2/catalog/gpus`와 API 문서로 확인한 뒤 `gpu-priority.txt`에 기록한다. PRO 6000 MIG 48GB는 v1 `gpuTypeIds` enum에 없어 제외했다.
 
 ## 6. pod-stop.sh 로직
 
 ```
 1. state/current_pod 가 없으면 STOP 로그(result=no_pod) 후 upstream OFF 확인하고 종료
 2. upstream.conf OFF 로 교체 → reload   (먼저 차단해서 삭제 중 요청 실패를 방지)
-3. DELETE https://rest.runpod.io/v1/pods/{id}
+3. DELETE https://api.runpod.io/v2/pods/{id}
 4. 실패하면 30초 간격 3회 재시도. 그래도 실패하면 STOP 로그(result=failed_delete). Pod가 남아서 과금되므로 수동 확인 필요
 5. 성공하면 가동시간, 추정비용 계산 → state/current_pod 삭제 → STOP 로그(result=ok)
 ```
@@ -176,8 +177,9 @@ RunPod HTTP proxy는 앞단 Cloudflare 때문에 **약 100초** 동안 응답이
 1. state/current_pod 가 없으면 (아침 기동 실패, 또는 이전 복구 실패)
    → "Pod 없음"으로 판정하고 6번(복구)으로 이동
 
-2. 점검 A: GET https://rest.runpod.io/v1/pods/{id}
-   - 404, 또는 desiredStatus 가 RUNNING 이 아니면 (EXITED, TERMINATED 등)
+2. 점검 A: GET https://api.runpod.io/v2/pods/{id}
+   - 404, 또는 status 가 EXITED, ERROR, TERMINATED 이면
+     (PROVISIONING, STARTING 은 일시 상태라 점검 B 로 판정)
      → 즉시 장애로 판정하고 5번으로 이동 (플랫폼이 Pod를 내린 것이 확실하므로 기다리지 않는다)
    - RunPod API 자체가 응답하지 않으면 점검 A는 판정하지 않고 점검 B 결과만 사용한다
 
@@ -273,7 +275,8 @@ STOP (종료 시):
 | `ok` | 정상 |
 | `skipped_holiday` (START) | 공휴일이라 건너뜀 |
 | `already_running` | 이미 기동 중인 Pod가 있음 |
-| `failed_no_gpu` | 재시도 모두 GPU 확보 실패 |
+| `failed_no_gpu` | 재시도 모두 GPU 확보 실패 (모든 GPU 가 400/403) |
+| `failed_api` (START) | RunPod API 오류(연결 실패, 키, 잔액 등)로 생성 실패 |
 | `failed_not_ready` | Pod는 생성됐지만 15분 안에 vLLM이 준비되지 않음 (Pod 삭제함) |
 | `failed_reload` | vLLM은 준비됐지만 nginx reload 실패 (Pod 삭제함) |
 | `failed_aborted` (START) | Pod 생성 후 예기치 않게 중단됨 (Pod 삭제 시도, 알림 발송) |

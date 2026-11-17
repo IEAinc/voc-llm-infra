@@ -43,25 +43,24 @@ Network Volume은 쓰지 않는다. Pod는 매일 새로 만들고, 기동할 �
 
 ## 4. Pod 생성 사양
 
-AWS `pod-start.sh`가 `POST https://rest.runpod.io/v1/pods`로 보내는 내용이다(필드명은 구축 시 API 문서로 확인).
+AWS `pod-start.sh`가 `POST https://api.runpod.io/v2/pods`로 보내는 내용이다(REST v2, [API 문서](https://docs.runpod.io/api-reference-v2/pods/create-a-pod)).
+REST v1(`rest.runpod.io/v1`)은 2026-11-15에 종료되어 2026-11-17에 v2로 옮겼다. v2는 GPU를 1종만 받고 알 수 없는 필드를 거부한다.
+그래서 `gpu.id`에 `gpu-priority.txt`의 GPU를 위에서부터 하나씩 넣어 `201`이 나올 때까지 요청한다.
 
 ```json
 {
   "name": "voc-llm",
-  "cloudType": "SECURE",
-  "gpuCount": 1,
-  "gpuTypeIds": ["NVIDIA A40", "NVIDIA RTX A6000", "NVIDIA L40",
-                 "NVIDIA RTX PRO 5000 Blackwell", "NVIDIA L40S", "NVIDIA RTX 6000 Ada Generation"],
-  "gpuTypePriority": "custom",
-  "imageName": "vllm/vllm-openai:v0.33.0",
-  "containerDiskInGb": 40,
+  "cloud": "SECURE",
+  "gpu": {"id": "NVIDIA A40", "count": 1},
+  "image": "vllm/vllm-openai:v0.33.0",
+  "disk": 40,
   "ports": ["8000/http"],
   "env": {
     "HF_HOME": "/root/.cache/huggingface",
     "HF_TOKEN": "<HF_TOKEN>",
     "VLLM_API_KEY": "<VLLM_API_KEY>"
   },
-  "dockerStartCmd": [
+  "cmd": [
     "--model", "<MODEL_ID>",
     "--served-model-name", "voc-llm",
     "--host", "0.0.0.0", "--port", "8000",

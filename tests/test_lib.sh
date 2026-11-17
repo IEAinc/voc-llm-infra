@@ -3,23 +3,28 @@
 lib() { ( . "$BIN/lib.sh"; "$@" ); }
 
 t_pod_spec() {
-  local j; j=$(lib pod_spec)
-  assert_eq "$(jq -r .cloudType <<<"$j")" SECURE "cloudType"
+  local j; j=$(lib pod_spec "NVIDIA A40")
+  assert_eq "$(jq -r .cloud <<<"$j")" SECURE "cloud"
   assert_eq "$(jq -r 'has("networkVolumeId")' <<<"$j")" false "no volume"
   assert_eq "$(jq -r 'has("volumeMountPath")' <<<"$j")" false "no mount"
   assert_eq "$(jq -r .env.HF_HOME <<<"$j")" /root/.cache/huggingface "HF_HOME"
   assert_eq "$(jq -r .env.VLLM_API_KEY <<<"$j")" test-vllm "VLLM_API_KEY"
-  assert_eq "$(jq -r '.gpuTypeIds|join(",")' <<<"$j")" "NVIDIA RTX A6000,NVIDIA A40,NVIDIA L40" "gpu order, comments/blank ignored"
-  assert_eq "$(jq -r .gpuTypePriority <<<"$j")" custom "gpuTypePriority"
-  assert_eq "$(jq -r .imageName <<<"$j")" "vllm/vllm-openai:v9.9.9" "image"
+  assert_eq "$(jq -c .gpu <<<"$j")" '{"id":"NVIDIA A40","count":1}' "gpu"
+  assert_eq "$(jq -r .image <<<"$j")" "vllm/vllm-openai:v9.9.9" "image"
+  assert_eq "$(jq -r .disk <<<"$j")" 40 "disk"
   assert_eq "$(jq -r '.ports|join(",")' <<<"$j")" "8000/http" "ports"
-  assert_eq "$(jq -r '.dockerStartCmd|join(" ")' <<<"$j")" \
-    "--model org/test-model --served-model-name voc-llm --host 0.0.0.0 --port 8000 --max-model-len 32768 --gpu-memory-utilization 0.90 --kv-cache-dtype auto" "dockerStartCmd"
+  assert_eq "$(jq -r '.cmd|join(" ")' <<<"$j")" \
+    "--model org/test-model --served-model-name voc-llm --host 0.0.0.0 --port 8000 --max-model-len 32768 --gpu-memory-utilization 0.90 --kv-cache-dtype auto" "cmd"
+  assert_eq "$(jq -r 'keys|join(",")' <<<"$j")" "cloud,cmd,disk,env,gpu,image,name,ports" "v2 fields only"
+}
+
+t_gpu_list() {
+  assert_eq "$(lib gpu_list | paste -sd,)" "NVIDIA RTX A6000,NVIDIA A40,NVIDIA L40" "gpu order, comments/blank ignored"
 }
 
 t_pod_spec_extra_args() {
-  local j; j=$(VLLM_EXTRA_ARGS='--limit-mm-per-prompt {"image":0}' lib pod_spec)
-  assert_eq "$(jq -r '.dockerStartCmd[-2:]|join(" ")' <<<"$j")" '--limit-mm-per-prompt {"image":0}' "extra args appended"
+  local j; j=$(VLLM_EXTRA_ARGS='--limit-mm-per-prompt {"image":0}' lib pod_spec "NVIDIA A40")
+  assert_eq "$(jq -r '.cmd[-2:]|join(" ")' <<<"$j")" '--limit-mm-per-prompt {"image":0}' "extra args appended"
 }
 
 t_upstream_on_off() {
@@ -52,4 +57,4 @@ t_repo_gpu_priority_first_is_a40() {
   assert_eq "$(grep -v '^#' "$ROOT/ec2/gpu-priority.txt" | grep -v '^$' | head -1)" "NVIDIA A40" "repo gpu-priority first line"
 }
 
-run_tests t_pod_spec t_pod_spec_extra_args t_upstream_on_off t_log_event t_holiday t_repo_gpu_priority_first_is_a40
+run_tests t_pod_spec t_gpu_list t_pod_spec_extra_args t_upstream_on_off t_log_event t_holiday t_repo_gpu_priority_first_is_a40

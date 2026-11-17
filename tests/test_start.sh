@@ -17,11 +17,20 @@ t_start_ok() {
   assert_eq "$(jq -r '.created_epoch|type' "$VOC_HOME/state/current_pod")" number "created_epoch type"
 }
 
-t_start_retry_then_ok() {
-  FAKE_CREATE_FAILS=2 start || fail "should succeed on 3rd attempt"
+t_start_gpu_fallback() {  # 1순위 400 이면 같은 회차에서 2순위
+  FAKE_CREATE_FAILS=1 start || fail "should succeed on 2nd gpu"
+  assert_eq "$(last .gpu)" "NVIDIA A40" "gpu"
+  assert_eq "$(last .pod_id)" pod2 "pod_id"
+  assert_eq "$(last .retries)" 0 "retries"
+  assert_eq "$(calls_count 'SLEEP 600')" 0 "no wait"
+}
+
+t_start_retry_then_ok() {  # GPU 3종 x 2회차 모두 400, 3회차 1순위 성공
+  FAKE_CREATE_FAILS=6 start || fail "should succeed on 3rd round"
   assert_eq "$(last .result)" ok "result"
   assert_eq "$(last .retries)" 2 "retries"
-  assert_eq "$(last .pod_id)" pod3 "pod_id"
+  assert_eq "$(last .pod_id)" pod7 "pod_id"
+  assert_eq "$(last .gpu)" "NVIDIA RTX A6000" "gpu"
   assert_eq "$(calls_count 'SLEEP 600')" 2 "retry waits"
 }
 
@@ -29,9 +38,20 @@ t_start_no_gpu() {
   FAKE_CREATE_FAILS=99 start && fail "should fail"
   assert_eq "$(events)" "START:failed_no_gpu" "events"
   assert_eq "$(last .retries)" 3 "attempts"
+  assert_eq "$(last .error)" "NVIDIA L40: no instances available" "last error"
+  assert_eq "$(calls_count 'RP POST /pods')" 9 "3 gpus x 3 rounds"
   assert_eq "$(calls_count 'NOTIFY START failed: no GPU')" 1 "notify"
   assert_file_has "$UPSTREAM_CONF" "return 503"
   assert_no_file "$VOC_HOME/state/current_pod"
+}
+
+t_start_api_error() {  # 400/403 외 오류는 다음 GPU 로 넘어가지 않고 회차 종료, 알림도 구분
+  FAKE_CREATE_RC=1 start && fail "should fail"
+  assert_eq "$(events)" "START:failed_api" "events"
+  assert_eq "$(last .error)" "NVIDIA RTX A6000: insufficient balance" "last error"
+  assert_eq "$(calls_count 'RP POST /pods')" 3 "1 per round"
+  assert_eq "$(calls_count 'NOTIFY START failed: RunPod API error')" 1 "notify"
+  assert_eq "$(calls_count 'NOTIFY START failed: no GPU')" 0 "not no-gpu"
 }
 
 t_start_not_ready_deletes_pod() {
@@ -185,6 +205,6 @@ t_ctl_boot_off_hours_no_pod() {
   assert_eq "$(calls_count 'RP POST')" 0 "no pod off hours"
 }
 
-run_tests t_ctl_shutdown_off_hours_stops_pod_and_ec2 t_ctl_shutdown_in_hours_refuses   t_ctl_shutdown_keeps_ec2_when_pod_remains t_ctl_shutdown_weekend t_ctl_boot_in_hours_starts_pod   t_ctl_boot_paused_no_pod t_ctl_boot_off_hours_no_pod t_start_paused_skips_cron t_start_force_ignores_paused t_ctl_pause_stops_pod   t_ctl_resume_in_hours_restarts t_ctl_resume_off_hours_waits t_start_ok t_start_retry_then_ok t_start_no_gpu t_start_not_ready_deletes_pod \
+run_tests t_ctl_shutdown_off_hours_stops_pod_and_ec2 t_ctl_shutdown_in_hours_refuses   t_ctl_shutdown_keeps_ec2_when_pod_remains t_ctl_shutdown_weekend t_ctl_boot_in_hours_starts_pod   t_ctl_boot_paused_no_pod t_ctl_boot_off_hours_no_pod t_start_paused_skips_cron t_start_force_ignores_paused t_ctl_pause_stops_pod   t_ctl_resume_in_hours_restarts t_ctl_resume_off_hours_waits t_start_ok t_start_gpu_fallback t_start_retry_then_ok t_start_no_gpu t_start_api_error t_start_not_ready_deletes_pod \
   t_start_not_ready_counts_slow_checks t_start_abort_deletes_pod \
   t_start_skips_holiday t_start_force_on_holiday t_start_already_running t_start_already_running_reenables_upstream t_start_already_running_not_ready_restarts t_start_resets_recover_counters

@@ -50,6 +50,12 @@ t_health_pod_404_is_down() {
   assert_eq "$(jq -r 'select(.result=="down")|.detail' "$LOG_FILE")" "pod status NOT_FOUND" "detail"
 }
 
+t_health_starting_is_not_down() {  # v2 일시 상태는 점검 B 로 판정
+  start
+  FAKE_POD_STATUS=STARTING health
+  assert_eq "$(events)" "START:ok" "STARTING + vLLM ok → healthy"
+}
+
 t_health_runpod_api_down_uses_check_b_only() {
   start
   FAKE_POD_STATUS=APIDOWN health
@@ -110,7 +116,7 @@ t_health_paused_skips() {
   assert_eq "$(events)" "START:ok" "no action while paused"
 }
 
-run_tests t_health_paused_skips t_health_ok_logs_nothing t_health_degraded_then_self_recovered t_health_down_check_b_replaces_pod \
+run_tests t_health_starting_is_not_down t_health_paused_skips t_health_ok_logs_nothing t_health_degraded_then_self_recovered t_health_down_check_b_replaces_pod \
   t_health_down_check_a_immediate t_health_pod_404_is_down t_health_runpod_api_down_uses_check_b_only \
   t_health_no_pod_triggers_start t_health_gives_up_after_3_recoveries t_health_maintenance_skips \
   t_health_holiday_skips t_health_skips_when_locked
