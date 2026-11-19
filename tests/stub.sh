@@ -13,6 +13,7 @@ _tick() { echo $(($(cat "$T/clock" 2>/dev/null || echo 0) + $1)) > "$T/clock"; }
 if [ -n "${FAKE_CLOCK:-}" ]; then now_epoch() { echo $((1800000000 + $(cat "$T/clock" 2>/dev/null || echo 0))); }; fi
 sleep_s() { echo "SLEEP $1" >> "$T/calls"; _tick "$1"; }
 notify()  { echo "NOTIFY $1" >> "$T/calls"; }
+uptime_report() { echo "REPORT $1" >> "$T/calls"; }
 
 rp() {
   echo "RP $1 $2" >> "$T/calls"

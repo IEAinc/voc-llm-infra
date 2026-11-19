@@ -69,6 +69,7 @@ case "${1:-}" in
       exit 1
     fi
     monitor_off
+    uptime_report off
     eval "$POWEROFF"
     echo "EC2 shutdown scheduled" ;;
   *) echo "사용법: $0 pause|resume|status|boot|shutdown" >&2; exit 2 ;;

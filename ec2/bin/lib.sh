@@ -51,7 +51,35 @@ notify() {
     --subject "[voc-llm] $1" --message "$2" >/dev/null 2>&1 || true
 }
 
-# daily_pod_lines DAY : 그날 Pod 켜짐/꺼짐 기록 (daily-report.sh)
+# uptime_report on|off : 켜짐(Pod 준비 완료)/꺼짐(EC2 종료 직전) 메일. .env 의 DAILY_REPORT_UNTIL(YYYY-MM-DD)까지만.
+# 메시지 속성 report=daily 를 붙인다. 받지 않을 구독에는 필터 정책 {"report":[{"exists":false}]} 을 건다.
+uptime_report() {
+  [ -n "${DAILY_REPORT_UNTIL:-}" ] && [[ ! "$(today)" > "$DAILY_REPORT_UNTIL" ]] || return 0
+  [ -n "${SNS_TOPIC_ARN:-}" ] || return 0
+  local day subject msg
+  day=$(today)
+  if [ "$1" = on ]; then
+    subject="ON $day"
+    msg="VOC LLM 켜짐 $day
+
+EC2 켜짐: $(uptime -s)
+Pod $(tail -n 1 "$LOG_FILE" | jq -r '.ts[11:16] + " 켜짐 (준비 \(.ready_sec)초, \(.gpu), \(.datacenter))"')"
+  else
+    subject="OFF $day"
+    msg="VOC LLM 꺼짐 $day
+
+EC2 켜짐: $(uptime -s)
+EC2 꺼짐: $(date -d '+1 min' +%H:%M) (예정)
+
+[오늘 Pod 기록]
+$(daily_pod_lines "$day")"
+  fi
+  aws sns publish --region "${SNS_REGION:-ap-northeast-2}" --topic-arn "$SNS_TOPIC_ARN" \
+    --subject "[voc-llm] $subject" --message "$msg" \
+    --message-attributes '{"report":{"DataType":"String","StringValue":"daily"}}' >/dev/null 2>&1 || true
+}
+
+# daily_pod_lines DAY : 그날 Pod 켜짐/꺼짐 기록
 daily_pod_lines() {
   jq -r --arg d "$1" '
     select(.ts[0:10] == $d and (.event == "START" or .event == "STOP") and .result != "no_pod")
@@ -239,6 +267,7 @@ do_start() {
     --argjson ready_sec "$(($(now_epoch) - t0))" --arg pod_id "$id" --arg gpu "$gpu" --arg datacenter "$dc" \
     --argjson retries "$CREATE_FAILS" --argjson cost_per_hr "$cost" \
     --arg model "$MODEL_ID" --arg endpoint "https://$host"
+  uptime_report on
 }
 
 # stop_orphan CUR_ID : created.json 의 Pod 가 현재 Pod 와 다르면(기록되지 못한 Pod) 삭제한다. 404 는 정상

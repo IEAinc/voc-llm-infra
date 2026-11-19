@@ -5,6 +5,7 @@ start() { bash "$BIN/pod-start.sh" "$@"; }
 t_start_ok() {
   start || fail "pod-start should succeed"
   assert_eq "$(events)" "START:ok" "events"
+  assert_eq "$(calls_count 'REPORT on')" 1 "on mail"
   assert_eq "$(last .pod_id)" pod1 "pod_id"
   assert_eq "$(last .gpu)" "NVIDIA RTX A6000" "gpu"
   assert_eq "$(last .datacenter)" EU-RO-1 "datacenter"
@@ -168,6 +169,7 @@ t_ctl_shutdown_off_hours_stops_pod_and_ec2() {
   VOC_NOW_DOW=1 VOC_NOW_HM=1810 ctl shutdown
   assert_eq "$(events)" "START:ok STOP:ok" "events"
   assert_eq "$(calls_count POWEROFF)" 1 "poweroff"
+  assert_eq "$(calls_count 'REPORT off')" 1 "off mail"
 }
 
 t_ctl_shutdown_in_hours_refuses() {
