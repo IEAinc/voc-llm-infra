@@ -51,6 +51,16 @@ notify() {
     --subject "[voc-llm] $1" --message "$2" >/dev/null 2>&1 || true
 }
 
+# daily_pod_lines DAY : 그날 Pod 켜짐/꺼짐 기록 (daily-report.sh)
+daily_pod_lines() {
+  jq -r --arg d "$1" '
+    select(.ts[0:10] == $d and (.event == "START" or .event == "STOP") and .result != "no_pod")
+    | .ts[11:16] + " "
+      + (if .event == "START" and .result == "ok" then "켜짐 (준비 \(.ready_sec)초, \(.gpu), \(.datacenter))"
+         elif .event == "STOP" and (.result == "ok" or .result == "replaced") then "꺼짐 (가동 \(.uptime_hr)시간, 약 $\(.est_cost_usd))"
+         else "\(.event) \(.result)" end)' "$LOG_FILE" 2>/dev/null | grep . || echo "기록 없음"
+}
+
 nginx_reload() {
   if [ -n "${VOC_NO_RELOAD:-}" ]; then return 0; fi
   nginx -t -q && nginx -s reload

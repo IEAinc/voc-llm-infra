@@ -37,6 +37,18 @@ t_upstream_on_off() {
   true
 }
 
+t_daily_pod_lines() {
+  cat > "$LOG_FILE" <<'EOF'
+{"event":"START","ts":"2026-11-18T08:34:18+09:00","result":"ok","ready_sec":219,"gpu":"NVIDIA A40","datacenter":"CA-MTL-1"}
+{"event":"STOP","ts":"2026-11-18T18:00:02+09:00","result":"ok","uptime_hr":9.49,"est_cost_usd":5.6}
+{"event":"START","ts":"2026-11-19T08:30:01+09:00","result":"ok","ready_sec":200,"gpu":"NVIDIA A40","datacenter":"X"}
+{"event":"STOP","ts":"2026-11-18T19:30:00+09:00","result":"no_pod"}
+EOF
+  assert_eq "$(lib daily_pod_lines 2026-11-18)" "08:34 켜짐 (준비 219초, NVIDIA A40, CA-MTL-1)
+18:00 꺼짐 (가동 9.49시간, 약 \$5.6)" "only that day, no_pod skipped"
+  assert_eq "$(lib daily_pod_lines 2026-11-20)" "기록 없음" "empty day"
+}
+
 t_log_event() {
   lib log_event START ok --arg pod_id p1 --argjson retries 2
   assert_eq "$(last .event)" START "event"
@@ -57,4 +69,4 @@ t_repo_gpu_priority_first_is_a40() {
   assert_eq "$(grep -v '^#' "$ROOT/ec2/gpu-priority.txt" | grep -v '^$' | head -1)" "NVIDIA A40" "repo gpu-priority first line"
 }
 
-run_tests t_pod_spec t_gpu_list t_pod_spec_extra_args t_upstream_on_off t_log_event t_holiday t_repo_gpu_priority_first_is_a40
+run_tests t_daily_pod_lines t_pod_spec t_gpu_list t_pod_spec_extra_args t_upstream_on_off t_log_event t_holiday t_repo_gpu_priority_first_is_a40

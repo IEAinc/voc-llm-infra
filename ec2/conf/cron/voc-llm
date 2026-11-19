@@ -3,6 +3,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
 @reboot          root sleep 20; /opt/voc-llm/bin/voc-ctl.sh boot >> /var/log/voc-llm/cron.log 2>&1
 30 8 * * 1-5     root /opt/voc-llm/bin/pod-start.sh  >> /var/log/voc-llm/cron.log 2>&1
 0 18 * * 1-5     root /opt/voc-llm/bin/pod-stop.sh   >> /var/log/voc-llm/cron.log 2>&1
+5 18 * * 1-5     root /opt/voc-llm/bin/daily-report.sh >> /var/log/voc-llm/cron.log 2>&1
 10 18 * * *      root /opt/voc-llm/bin/voc-ctl.sh shutdown >> /var/log/voc-llm/cron.log 2>&1
 30 19 * * *      root /opt/voc-llm/bin/voc-ctl.sh shutdown >> /var/log/voc-llm/cron.log 2>&1
 */2 9-17 * * 1-5 root /opt/voc-llm/bin/pod-health.sh >> /var/log/voc-llm/cron.log 2>&1
