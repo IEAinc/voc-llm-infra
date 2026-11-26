@@ -6,6 +6,9 @@
 #   voc-ctl.sh boot     : EC2 부팅 직후(cron @reboot). 감시를 켜고, 업무시간이면 Pod 를 띄운다
 #   voc-ctl.sh shutdown : 업무시간 밖이면 Pod 를 내리고 감시를 끈 뒤 EC2 를 끈다(cron 18:10).
 #                         Pod 삭제에 실패하면 과금 방지를 위해 EC2 를 끄지 않는다(19:30 재시도)
+#   voc-ctl.sh manual   : 수동 모드. 지금 Pod 를 띄우고 18:00 Pod 종료, 18:10/19:30 EC2 종료를 건너뛴다
+#                         (건너뛸 때마다 알림 메일). infra/manual-on.sh 가 부른다
+#   voc-ctl.sh auto     : 수동 모드 해제. 업무시간 밖이면 바로 shutdown 한다. infra/manual-off.sh 가 부른다
 # 업무시간 = 평일 08:30~17:59. 공휴일·일시정지는 pod-start.sh 가 거른다.
 set -euo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -57,12 +60,17 @@ case "${1:-}" in
     else echo "resumed: 다음 평일 08:30 에 기동"; fi ;;
   status)
     if [ -f "$STATE_DIR/paused" ]; then echo "state: paused"; else echo "state: active"; fi
+    if [ -f "$STATE_DIR/manual" ]; then echo "mode: manual (자동 종료 꺼짐)"; else echo "mode: auto"; fi
     if [ -f "$STATE_DIR/current_pod" ]; then jq -c '{pod_id, gpu, endpoint}' "$STATE_DIR/current_pod"; else echo "pod: none"; fi ;;
   boot)
     ( monitor_on >/dev/null 2>&1 & )
     if in_hours; then bash "$BIN/pod-start.sh"; fi ;;
   shutdown)
     if in_hours; then echo "업무시간이라 EC2 를 끄지 않습니다"; exit 0; fi
+    if [ -f "$STATE_DIR/manual" ]; then
+      notify "Auto shutdown skipped (manual mode)" "수동 모드라 자동 종료를 건너뛰었습니다. Pod 와 EC2 가 계속 과금됩니다. 작업이 끝나면 infra/manual-off.sh 를 실행하세요."
+      echo "수동 모드라 EC2 를 끄지 않습니다"; exit 0
+    fi
     bash "$BIN/pod-stop.sh" || true
     if [ -f "$STATE_DIR/current_pod" ]; then
       notify "EC2 shutdown skipped" "Pod $(jq -r .pod_id "$STATE_DIR/current_pod") 삭제에 실패해 EC2 를 끄지 않았습니다. RunPod 콘솔에서 Pod 를 직접 삭제하세요."
@@ -72,5 +80,13 @@ case "${1:-}" in
     uptime_report off
     eval "$POWEROFF"
     echo "EC2 shutdown scheduled" ;;
-  *) echo "사용법: $0 pause|resume|status|boot|shutdown" >&2; exit 2 ;;
+  manual)
+    touch "$STATE_DIR/manual"
+    bash "$BIN/pod-start.sh" --force
+    echo "manual mode: 자동 종료 중지" ;;
+  auto)
+    rm -f "$STATE_DIR/manual"
+    if in_hours; then echo "auto mode: 업무시간이라 Pod 유지, 18:00 에 자동 종료"
+    else bash "$0" shutdown; fi ;;
+  *) echo "사용법: $0 pause|resume|status|boot|shutdown|manual|auto" >&2; exit 2 ;;
 esac

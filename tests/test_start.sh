@@ -207,6 +207,38 @@ t_ctl_boot_off_hours_no_pod() {
   assert_eq "$(calls_count 'RP POST')" 0 "no pod off hours"
 }
 
-run_tests t_ctl_shutdown_off_hours_stops_pod_and_ec2 t_ctl_shutdown_in_hours_refuses   t_ctl_shutdown_keeps_ec2_when_pod_remains t_ctl_shutdown_weekend t_ctl_boot_in_hours_starts_pod   t_ctl_boot_paused_no_pod t_ctl_boot_off_hours_no_pod t_start_paused_skips_cron t_start_force_ignores_paused t_ctl_pause_stops_pod   t_ctl_resume_in_hours_restarts t_ctl_resume_off_hours_waits t_start_ok t_start_gpu_fallback t_start_retry_then_ok t_start_no_gpu t_start_api_error t_start_not_ready_deletes_pod \
+t_ctl_manual_skips_shutdown() {
+  VOC_NOW_DOW=6 VOC_NOW_HM=1000 ctl manual
+  assert_eq "$(events)" "START:ok" "pod started"
+  VOC_NOW_DOW=6 VOC_NOW_HM=1810 ctl shutdown
+  assert_eq "$(calls_count POWEROFF)" 0 "no poweroff in manual"
+  assert_eq "$(calls_count 'NOTIFY Auto shutdown skipped')" 1 "reminder mail"
+  assert_eq "$(events)" "START:ok" "pod kept"
+}
+
+t_ctl_auto_off_hours_shuts_down() {
+  VOC_NOW_DOW=6 VOC_NOW_HM=1000 ctl manual
+  VOC_NOW_DOW=6 VOC_NOW_HM=2000 ctl auto
+  assert_no_file "$VOC_HOME/state/manual"
+  assert_eq "$(events)" "START:ok STOP:ok" "pod stopped"
+  assert_eq "$(calls_count POWEROFF)" 1 "poweroff"
+}
+
+t_ctl_auto_in_hours_keeps_pod() {
+  VOC_NOW_DOW=1 VOC_NOW_HM=1000 ctl manual
+  VOC_NOW_DOW=1 VOC_NOW_HM=1000 ctl auto
+  assert_no_file "$VOC_HOME/state/manual"
+  assert_eq "$(events)" "START:ok" "pod kept"
+  assert_eq "$(calls_count POWEROFF)" 0 "no poweroff"
+}
+
+t_ctl_auto_pod_delete_fail_mails() {
+  VOC_NOW_DOW=6 VOC_NOW_HM=1000 ctl manual
+  FAKE_DELETE_RC=1 VOC_NOW_DOW=6 VOC_NOW_HM=2000 ctl auto && fail "should fail"
+  assert_eq "$(calls_count POWEROFF)" 0 "no poweroff while pod billed"
+  assert_eq "$(calls_count 'NOTIFY EC2 shutdown skipped')" 1 "notify"
+}
+
+run_tests t_ctl_manual_skips_shutdown t_ctl_auto_off_hours_shuts_down t_ctl_auto_in_hours_keeps_pod t_ctl_auto_pod_delete_fail_mails t_ctl_shutdown_off_hours_stops_pod_and_ec2 t_ctl_shutdown_in_hours_refuses   t_ctl_shutdown_keeps_ec2_when_pod_remains t_ctl_shutdown_weekend t_ctl_boot_in_hours_starts_pod   t_ctl_boot_paused_no_pod t_ctl_boot_off_hours_no_pod t_start_paused_skips_cron t_start_force_ignores_paused t_ctl_pause_stops_pod   t_ctl_resume_in_hours_restarts t_ctl_resume_off_hours_waits t_start_ok t_start_gpu_fallback t_start_retry_then_ok t_start_no_gpu t_start_api_error t_start_not_ready_deletes_pod \
   t_start_not_ready_counts_slow_checks t_start_abort_deletes_pod \
   t_start_skips_holiday t_start_force_on_holiday t_start_already_running t_start_already_running_reenables_upstream t_start_already_running_not_ready_restarts t_start_resets_recover_counters
