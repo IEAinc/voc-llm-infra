@@ -3,6 +3,7 @@
 #   자동 종료를 되살린다. 업무시간(평일 08:30~17:59) 밖이면 바로 Pod 를 내리고 EC2 를 끈다.
 #   업무시간이면 Pod 를 그대로 두고 18:00/18:10 에 평소처럼 꺼진다.
 #   Pod 삭제에 실패하면 EC2 를 끄지 않고 "EC2 shutdown skipped" 알림을 보낸다.
+# 사무실 밖 PC 는 먼저 22번 IP 허용 필요 (안 하면 SSH 에서 멈춤): docs/운영-가이드.md "실행 전 IP 허용 확인"
 set -euo pipefail
 cd "$(dirname "$0")"
 set -a; . ./aws.env; . ./aws.out; set +a

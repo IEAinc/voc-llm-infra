@@ -4,6 +4,7 @@
 #   자동 종료 시각마다 "Auto shutdown skipped (manual mode)" 알림이 간다.
 #   작업이 끝나면 반드시 infra/manual-off.sh 를 실행한다.
 # 필요: aws.env/aws.out, voc-llm-key.pem, 이 PC 의 IP 가 보안그룹 22번에 허용돼 있을 것
+# 사무실 밖 PC 는 먼저 22번 IP 허용 필요 (안 하면 SSH 에서 멈춤): docs/운영-가이드.md "실행 전 IP 허용 확인"
 set -euo pipefail
 cd "$(dirname "$0")"
 set -a; . ./aws.env; . ./aws.out; set +a
